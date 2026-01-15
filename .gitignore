@@ -1,0 +1,37 @@
+/target
+.direnv/
+.envrc
+/result
+/result-*
+**/*.rs.bk
+# Python build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.venv*/
+dist/
+build/
+*.so
+.env
+.pytest_cache/
+.coverage
+htmlcov/
+.DS_Store
+# PyInstaller build artifacts
+src/dist/
+src/build/
+*.spec
+# Nix build artifacts
+.result
+result*
+.nix-*
+.nix-gcroots/
+# Virtual environments
+.venv/
+venv/
+env/
