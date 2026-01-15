@@ -40,13 +40,13 @@ jobs:
         if: ${{ runner.os != 'Windows' }}
         run: |
           cd src
-          pyinstaller --onefile --windowed runner_cross_platform.py
+          pyinstaller --onefile --windowed --additional-hooks-dir=. runner_cross_platform.py
 
       - name: Build executable (Windows)
         if: ${{ runner.os == 'Windows' }}
         run: |
           cd src
-          pyinstaller --onefile --console runner_cross_platform.py
+          pyinstaller --onefile --console --additional-hooks-dir=. runner_cross_platform.py
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

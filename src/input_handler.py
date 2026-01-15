@@ -33,16 +33,16 @@ class InputHandler:
     def _start_linux(self):
         import asyncio
         import signal
-        from .linux_input import LinuxInputListener
+        from linux_input import LinuxInputListener
         listener = LinuxInputListener(self.play_sound, self.evdev, self.ecodes)
         return listener.run()
 
     def _start_windows(self):
-        from .windows_input import WindowsInputListener
+        from windows_input import WindowsInputListener
         listener = WindowsInputListener(self.play_sound, self.ctypes, self.wintypes)
         return listener.run()
 
     def _start_macos(self):
-        from .macos_input import MacOSInputListener
+        from macos_input import MacOSInputListener
         listener = MacOSInputListener(self.play_sound, self.Quartz)
         return listener.run()

@@ -162,8 +162,8 @@ def main():
         result = asyncio.run(linux_main())
     else:
         # For non-Linux platforms, use the input handler
-        from input_handler import InputHandler
-        handler = InputHandler(play_sound)
+        import input_handler
+        handler = input_handler.InputHandler(play_sound)
         result = handler.start_listening()
 
     # Properly quit pygame when done
