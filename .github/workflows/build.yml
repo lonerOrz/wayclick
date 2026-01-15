@@ -20,19 +20,19 @@ jobs:
         python-version: ${{ matrix.python-version }}
 
     - name: Install dependencies on Ubuntu
-      if: runner.os == 'Linux'
+      if: ${{ runner.os == 'Linux' }}
       run: |
         sudo apt-get update
         sudo apt-get install -y libevdev-dev libudev-dev
         pip install pygame-ce evdev pyinstaller
 
     - name: Install dependencies on Windows
-      if: runner.os == 'Windows'
+      if: ${{ runner.os == 'Windows' }}
       run: |
         pip install pygame-ce pywin32 pyinstaller
 
     - name: Install dependencies on macOS
-      if: runner.os == 'macOS'
+      if: ${{ runner.os == 'macOS' }}
       run: |
         pip install pygame-ce pyinstaller
 
@@ -48,8 +48,25 @@ jobs:
         cd src
         pyinstaller --onefile --console runner_cross_platform.py
 
+    - name: Create example config template
+      run: |
+        mkdir -p example-config
+        echo '{"mappings": {"28": "click1.wav", "57": "space.wav"}, "defaults": ["click1.wav", "click2.wav"]}' > example-config/config.json
+        echo '# WayClick Configuration Template' > example-config/README.md
+        echo '' >> example-config/README.md
+        echo 'This is an example configuration for WayClick.' >> example-config/README.md
+        echo 'Place your sound files in the same directory as config.json' >> example-config/README.md
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: wayclick-${{ runner.os }}-${{ matrix.python-version }}
-        path: src/dist/
+        path: |
+          src/dist/
+          example-config/
+
+    - name: Upload example config separately
+      uses: actions/upload-artifact@v4
+      with:
+        name: wayclick-example-config-${{ matrix.python-version }}
+        path: example-config/
