@@ -1,0 +1,48 @@
+name: Build and Package WayClick
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: [3.10]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies on Ubuntu
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libevdev-dev libudev-dev
+        pip install pygame-ce evdev pyinstaller
+
+    - name: Install dependencies on Windows
+      if: runner.os == 'Windows'
+      run: |
+        pip install pygame-ce pywin32 pyinstaller
+
+    - name: Install dependencies on macOS
+      if: runner.os == 'macOS'
+      run: |
+        pip install pygame-ce pyinstaller
+
+    - name: Build executable
+      run: |
+        cd src
+        pyinstaller --onefile --windowed runner_cross_platform.py
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: wayclick-${{ runner.os }}-${{ matrix.python-version }}
+        path: src/dist/
