@@ -26,6 +26,7 @@ htmlcov/
 src/dist/
 src/build/
 *.spec
+!wayclick.spec
 # Nix build artifacts
 .result
 result*

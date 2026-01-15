@@ -51,6 +51,14 @@ class WindowsInputListener:
 
     def setup_hooks(self):
         try:
+            # Check if required DLLs are accessible
+            try:
+                self.user32
+                self.kernel32
+            except AttributeError as e:
+                print(f"\033[1;31m[ERROR]\033[0m Required Windows DLLs not accessible: {str(e)}")
+                return False
+
             cmpfunc_kbd = self.ctypes.WINFUNCTYPE(
                 self.ctypes.c_int,
                 self.ctypes.c_int,
@@ -78,6 +86,9 @@ class WindowsInputListener:
             if not self.hhook_keyboard:
                 error_code = self.kernel32.GetLastError()
                 print(f"\033[1;31m[ERROR]\033[0m Failed to install keyboard hook. Error code: {error_code}")
+                if error_code == 126:
+                    print("\033[1;31m[ERROR]\033[0m Error 126 indicates a missing DLL. This often occurs when")
+                    print("\033[1;31m[ERROR]\033[0m PyInstaller fails to include all necessary Windows system libraries.")
 
             self.hhook_mouse = self.user32.SetWindowsHookExW(
                 self.WH_MOUSE_LL,
@@ -90,6 +101,9 @@ class WindowsInputListener:
             if not self.hhook_mouse:
                 error_code = self.kernel32.GetLastError()
                 print(f"\033[1;31m[ERROR]\033[0m Failed to install mouse hook. Error code: {error_code}")
+                if error_code == 126:
+                    print("\033[1;31m[ERROR]\033[0m Error 126 indicates a missing DLL. This often occurs when")
+                    print("\033[1;31m[ERROR]\033[0m PyInstaller fails to include all necessary Windows system libraries.")
 
             if not self.hhook_keyboard or not self.hhook_mouse:
                 return False
@@ -119,6 +133,8 @@ class WindowsInputListener:
             print("  - Insufficient privileges (try running as administrator)")
             print("  - Security software blocking the hooks")
             print("  - System policy restrictions")
+            print("  - Antivirus software interfering with system hooks")
+            print("\033[1;33m[WARNING]\033[0m Exiting due to inability to install hooks.")
             return 1
 
         try:

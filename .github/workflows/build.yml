@@ -43,18 +43,9 @@ jobs:
         run: pip install pywin32
 
       # ---------- Build ----------
-      - name: Build executable (Unix)
-        if: runner.os != 'Windows'
+      - name: Build executable
         run: |
-          pyinstaller --onefile --console \
-            --additional-hooks-dir=src \
-            --name wayclick \
-            src/runner_cross_platform.py
-
-      - name: Build executable (Windows)
-        if: runner.os == 'Windows'
-        run: pyinstaller --onefile --console --additional-hooks-dir=src --name wayclick src/runner_cross_platform.py
-        shell: cmd
+          pyinstaller wayclick.spec
 
       # ---------- Bundle ----------
       - name: Prepare bundle (Unix)
