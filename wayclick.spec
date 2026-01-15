@@ -7,7 +7,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('src/hook-runner_cross_platform.py', '.'),  # Include our custom hook
+        ('src/hook-runner_cross_platform.py', '.'),
     ],
     hiddenimports=[
         'input_handler',
@@ -26,17 +26,6 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
-
-# Add specific Windows binaries if on Windows
-if a.datas is not None:
-    import sys
-    if sys.platform.startswith('win'):
-        # Add Windows-specific DLLs that might be needed
-        import ctypes.util
-        for dll_name in ['user32.dll', 'kernel32.dll']:
-            dll_path = ctypes.util.find_library(dll_name)
-            if dll_path:
-                a.binaries.append((dll_name, dll_path))
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
