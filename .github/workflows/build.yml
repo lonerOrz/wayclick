@@ -42,7 +42,7 @@ jobs:
         pyinstaller --onefile --windowed runner_cross_platform.py
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: wayclick-${{ runner.os }}-${{ matrix.python-version }}
         path: src/dist/
