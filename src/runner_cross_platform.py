@@ -18,9 +18,9 @@ current_platform = platform.system().lower()
 if current_platform == "linux":
     CONFIG_DIR = os.path.expanduser("~/.config/wayclick")
 elif current_platform == "windows":
-    CONFIG_DIR = os.path.expandvars("%APPDATA%\\wayclick")
+    CONFIG_DIR = os.path.expanduser("~\\.wayclick")
 elif current_platform == "darwin":  # macOS
-    CONFIG_DIR = os.path.expanduser("~/Library/Application Support/wayclick")
+    CONFIG_DIR = os.path.expanduser("~/.config/wayclick")
 else:
     # Default fallback
     CONFIG_DIR = os.path.expanduser("~/.config/wayclick")
