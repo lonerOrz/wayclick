@@ -36,10 +36,17 @@ jobs:
       run: |
         pip install pygame-ce pyinstaller
 
-    - name: Build executable
+    - name: Build executable (Linux/macOS)
+      if: ${{ runner.os != 'Windows' }}
       run: |
         cd src
         pyinstaller --onefile --windowed runner_cross_platform.py
+
+    - name: Build executable (Windows)
+      if: ${{ runner.os == 'Windows' }}
+      run: |
+        cd src
+        pyinstaller --onefile --console runner_cross_platform.py
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
