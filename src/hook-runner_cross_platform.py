@@ -8,4 +8,7 @@ hiddenimports += [
     'linux_input',
     'windows_input',
     'macos_input',
+    # Add Windows-specific modules that might be needed
+    'ctypes',
+    'ctypes.wintypes',
 ]

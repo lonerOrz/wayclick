@@ -50,45 +50,60 @@ class WindowsInputListener:
         return self.user32.CallNextHookEx(self.hhook_mouse, nCode, wParam, lParam)
 
     def setup_hooks(self):
-        cmpfunc_kbd = self.ctypes.WINFUNCTYPE(
-            self.ctypes.c_int, 
-            self.ctypes.c_int, 
-            self.wintypes.WPARAM, 
-            self.wintypes.LPARAM
-        )
-        cmpfunc_mse = self.ctypes.WINFUNCTYPE(
-            self.ctypes.c_int, 
-            self.ctypes.c_int, 
-            self.wintypes.WPARAM, 
-            self.wintypes.LPARAM
-        )
-        
-        keyboard_callback_ptr = cmpfunc_kbd(self.keyboard_proc)
-        mouse_callback_ptr = cmpfunc_mse(self.mouse_proc)
-        
-        self.hhook_keyboard = self.user32.SetWindowsHookExW(
-            self.WH_KEYBOARD_LL,
-            keyboard_callback_ptr,
-            self.kernel32.GetModuleHandleW(None),
-            0
-        )
-        
-        self.hhook_mouse = self.user32.SetWindowsHookExW(
-            self.WH_MOUSE_LL,
-            mouse_callback_ptr,
-            self.kernel32.GetModuleHandleW(None),
-            0
-        )
-        
-        if not self.hhook_keyboard or not self.hhook_mouse:
-            print("\033[1;31m[ERROR]\033[0m Failed to install hooks")
+        try:
+            cmpfunc_kbd = self.ctypes.WINFUNCTYPE(
+                self.ctypes.c_int,
+                self.ctypes.c_int,
+                self.wintypes.WPARAM,
+                self.wintypes.LPARAM
+            )
+            cmpfunc_mse = self.ctypes.WINFUNCTYPE(
+                self.ctypes.c_int,
+                self.ctypes.c_int,
+                self.wintypes.WPARAM,
+                self.wintypes.LPARAM
+            )
+
+            keyboard_callback_ptr = cmpfunc_kbd(self.keyboard_proc)
+            mouse_callback_ptr = cmpfunc_mse(self.mouse_proc)
+
+            self.hhook_keyboard = self.user32.SetWindowsHookExW(
+                self.WH_KEYBOARD_LL,
+                keyboard_callback_ptr,
+                self.kernel32.GetModuleHandleW(None),
+                0
+            )
+
+            # Check if keyboard hook was installed successfully
+            if not self.hhook_keyboard:
+                error_code = self.kernel32.GetLastError()
+                print(f"\033[1;31m[ERROR]\033[0m Failed to install keyboard hook. Error code: {error_code}")
+
+            self.hhook_mouse = self.user32.SetWindowsHookExW(
+                self.WH_MOUSE_LL,
+                mouse_callback_ptr,
+                self.kernel32.GetModuleHandleW(None),
+                0
+            )
+
+            # Check if mouse hook was installed successfully
+            if not self.hhook_mouse:
+                error_code = self.kernel32.GetLastError()
+                print(f"\033[1;31m[ERROR]\033[0m Failed to install mouse hook. Error code: {error_code}")
+
+            if not self.hhook_keyboard or not self.hhook_mouse:
+                return False
+
+            # Keep references to prevent garbage collection
+            self.user32.keyboard_callback_ptr = keyboard_callback_ptr
+            self.user32.mouse_callback_ptr = mouse_callback_ptr
+
+            return True
+        except Exception as e:
+            print(f"\033[1;31m[ERROR]\033[0m Exception during hook setup: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return False
-        
-        # Keep references to prevent garbage collection
-        self.user32.keyboard_callback_ptr = keyboard_callback_ptr
-        self.user32.mouse_callback_ptr = mouse_callback_ptr
-        
-        return True
 
     def remove_hooks(self):
         if self.hhook_keyboard:
@@ -98,10 +113,14 @@ class WindowsInputListener:
 
     def run(self):
         print("\033[1;32m[INFO]\033[0m Starting WayClick for Windows...")
-        
+
         if not self.setup_hooks():
+            print("\033[1;31m[ERROR]\033[0m Could not install input hooks. This may be due to:")
+            print("  - Insufficient privileges (try running as administrator)")
+            print("  - Security software blocking the hooks")
+            print("  - System policy restrictions")
             return 1
-        
+
         try:
             # Message loop
             msg = self.wintypes.MSG()
@@ -119,5 +138,5 @@ class WindowsInputListener:
             print("\033[1;33m[INFO]\033[0m Shutting down...")
         finally:
             self.remove_hooks()
-        
+
         return 0

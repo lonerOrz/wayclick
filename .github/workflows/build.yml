@@ -1,4 +1,4 @@
-name: Build and Package WayClick
+name: Build WayClick (PyInstaller)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,9 @@ on:
 jobs:
   build:
     runs-on: ${{ matrix.os }}
+
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.10"]
@@ -19,39 +21,53 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies on Ubuntu
-        if: ${{ runner.os == 'Linux' }}
+      # ---------- Linux system deps ----------
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libevdev-dev libudev-dev
-          pip install pygame-ce evdev pyinstaller
 
-      - name: Install dependencies on Windows
-        if: ${{ runner.os == 'Windows' }}
+      # ---------- Python deps ----------
+      - name: Install Python dependencies
         run: |
-          pip install pygame-ce pywin32 pyinstaller
-
-      - name: Install dependencies on macOS
-        if: ${{ runner.os == 'macOS' }}
-        run: |
+          pip install --upgrade pip
           pip install pygame-ce pyinstaller
 
-      - name: Build executable (Linux/macOS)
-        if: ${{ runner.os != 'Windows' }}
-        run: |
-          cd src
-          pyinstaller --onefile --windowed --additional-hooks-dir=. runner_cross_platform.py
+      - name: Install Linux-only Python deps
+        if: runner.os == 'Linux'
+        run: pip install evdev
 
-      - name: Build executable (Windows)
-        if: ${{ runner.os == 'Windows' }}
-        run: |
-          cd src
-          pyinstaller --onefile --console --additional-hooks-dir=. runner_cross_platform.py
+      - name: Install Windows-only Python deps
+        if: runner.os == 'Windows'
+        run: pip install pywin32
 
-      - name: Upload artifacts
+      # ---------- Build ----------
+      - name: Build executable
+        run: |
+          pyinstaller --onefile --console \
+            --additional-hooks-dir=src \
+            --name wayclick \
+            src/runner_cross_platform.py
+
+      # ---------- Bundle ----------
+      - name: Prepare bundle (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p bundle/examples
+          cp dist/wayclick bundle/
+          cp -r template/wayclick bundle/examples/
+
+      - name: Prepare bundle (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir bundle\examples
+          copy dist\wayclick.exe bundle\
+          xcopy template\wayclick bundle\examples\wayclick /E /I
+
+      # ---------- Upload ----------
+      - name: Upload bundle
         uses: actions/upload-artifact@v4
         with:
-          name: wayclick-${{ runner.os }}-${{ matrix.python-version }}
-          path: |
-            src/dist/
-            template/
+          name: wayclick-${{ runner.os }}-bundle
+          path: bundle/
