@@ -51,14 +51,6 @@ class WindowsInputListener:
 
     def setup_hooks(self):
         try:
-            # Check if required DLLs are accessible
-            try:
-                self.user32
-                self.kernel32
-            except AttributeError as e:
-                print(f"\033[1;31m[ERROR]\033[0m Required Windows DLLs not accessible: {str(e)}")
-                return False
-
             cmpfunc_kbd = self.ctypes.WINFUNCTYPE(
                 self.ctypes.c_int,
                 self.ctypes.c_int,
@@ -87,8 +79,9 @@ class WindowsInputListener:
                 error_code = self.kernel32.GetLastError()
                 print(f"\033[1;31m[ERROR]\033[0m Failed to install keyboard hook. Error code: {error_code}")
                 if error_code == 126:
-                    print("\033[1;31m[ERROR]\033[0m Error 126 indicates a missing DLL. This often occurs when")
-                    print("\033[1;31m[ERROR]\033[0m PyInstaller fails to include all necessary Windows system libraries.")
+                    print("\033[1;31m[ERROR]\033[0m Error 126 indicates a missing DLL.")
+                    print("\033[1;31m[ERROR]\033[0m This is often related to PyInstaller and Windows security policies.")
+                return False
 
             self.hhook_mouse = self.user32.SetWindowsHookExW(
                 self.WH_MOUSE_LL,
@@ -102,8 +95,13 @@ class WindowsInputListener:
                 error_code = self.kernel32.GetLastError()
                 print(f"\033[1;31m[ERROR]\033[0m Failed to install mouse hook. Error code: {error_code}")
                 if error_code == 126:
-                    print("\033[1;31m[ERROR]\033[0m Error 126 indicates a missing DLL. This often occurs when")
-                    print("\033[1;31m[ERROR]\033[0m PyInstaller fails to include all necessary Windows system libraries.")
+                    print("\033[1;31m[ERROR]\033[0m Error 126 indicates a missing DLL.")
+                    print("\033[1;31m[ERROR]\033[0m This is often related to PyInstaller and Windows security policies.")
+                # Clean up the keyboard hook if mouse hook failed
+                if self.hhook_keyboard:
+                    self.user32.UnhookWindowsHookEx(self.hhook_keyboard)
+                    self.hhook_keyboard = None
+                return False
 
             if not self.hhook_keyboard or not self.hhook_mouse:
                 return False

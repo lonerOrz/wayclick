@@ -1,21 +1,33 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_all
+
 block_cipher = None
+
+# 关键：显式收集 pywin32
+pywin32_datas, pywin32_binaries, pywin32_hidden = collect_all('pywin32')
 
 a = Analysis(
     ['src/runner_cross_platform.py'],
     pathex=[],
-    binaries=[],
+    binaries=pywin32_binaries,   # 包含 pywin32 的二进制文件
     datas=[
         ('src/hook-runner_cross_platform.py', '.'),
+        *pywin32_datas,           # 包含 pywin32 的数据文件
     ],
     hiddenimports=[
+        *pywin32_hidden,          # 包含 pywin32 的隐藏导入
+        'win32api',
+        'win32con',
+        'win32gui',
+        'pythoncom',
+        'pywintypes',
+        'ctypes',
+        'ctypes.wintypes',
         'input_handler',
         'linux_input',
         'windows_input',
         'macos_input',
-        'ctypes',
-        'ctypes.wintypes',
     ],
     hookspath=['src'],
     hooksconfig={},
