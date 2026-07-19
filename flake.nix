@@ -1,5 +1,5 @@
 {
-  description = "WayClick Elite – low-latency input sound engine";
+  description = "WayClick – low-latency input sound engine (Rust)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -8,90 +8,38 @@
   outputs =
     { self, nixpkgs }:
     let
-      forEachSystem = nixpkgs.lib.genAttrs [
+      systems = [
         "x86_64-linux"
         "aarch64-linux"
         "x86_64-darwin"
         "aarch64-darwin"
       ];
-    in
-    {
-      # `nix fmt` — one command formats the whole project.
-      formatter = forEachSystem (
+
+      perSystem =
         system:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
-        in
-        pkgs.writeShellScriptBin "fmt" ''
-          set -euo pipefail
-          ${pkgs.black}/bin/black src tests template .github
-          ${pkgs.prettier}/bin/prettier --write "**/*.{json,yaml,yml,md}"
-          ${pkgs.nixpkgs-fmt}/bin/nixpkgs-fmt flake.nix
-        ''
-      );
+          pkgs = import nixpkgs { inherit system; };
 
-      devShells = forEachSystem (
-        system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-        in
-        {
-          default = pkgs.mkShell {
-            buildInputs =
-              with pkgs;
-              [
-                python311
-                python311Packages.pygame-ce
-                python311Packages.pyinstaller
-                prettier
-              ]
-              ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
-                python311Packages.evdev
-              ];
+          nativeLibs = [
+            pkgs.pkg-config
+            pkgs.alsa-lib
+            pkgs.udev
+            pkgs.libevdev
+          ];
 
-            shellHook = ''
-              echo "WayClick development environment ready!"
-              echo "Format:  nix fmt   (black src tests template .github && prettier '**/*.{json,yaml,yml,md}')"
-            '';
-          };
-        }
-      );
-
-      # `nix build` / `nix run .#wayclick` — packages the engine from src.
-      packages = forEachSystem (
-        system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-          python = pkgs.python311;
-        in
-        {
-          default = pkgs.stdenv.mkDerivation {
+          wayclick = pkgs.rustPlatform.buildRustPackage {
             pname = "wayclick";
-            version = "0.1";
-
+            version = "0.1.0";
             src = pkgs.lib.cleanSource ./.;
 
-            nativeBuildInputs = [ pkgs.makeWrapper ];
-            propagatedBuildInputs =
-              [ pkgs.python311Packages.pygame-ce ]
-              ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.python311Packages.evdev ];
+            cargoLock.lockFile = ./Cargo.lock;
 
-            buildPhase = ''
-              mkdir -p $out/lib/wayclick
-              cp -r src/* $out/lib/wayclick/
-              # Skip __pycache__ copied from the working tree.
-              rm -rf $out/lib/wayclick/__pycache__
-              cp -r template $out/lib/wayclick/template
-            '';
+            nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux nativeLibs;
+            buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux nativeLibs;
 
-            installPhase = ''
-              mkdir -p $out/bin
-              cat > $out/bin/wayclick <<EOF
-              #!/bin/sh
-              export PYTHONPATH=$out/lib/wayclick:\''\${PYTHONPATH:+:\$PYTHONPATH}
-              exec ${python}/bin/python3 -m runner_cross_platform "\$@"
-              EOF
-              chmod +x $out/bin/wayclick
+            postInstall = ''
+              mkdir -p $out/share/wayclick
+              cp -r ${./template/wayclick} $out/share/wayclick/config 2>/dev/null || true
             '';
 
             meta = {
@@ -99,7 +47,54 @@
               mainProgram = "wayclick";
             };
           };
-        }
-      );
+        in
+        {
+          packages.default = wayclick;
+          checks.unit-tests = pkgs.rustPlatform.buildRustPackage {
+            pname = "wayclick-tests";
+            version = "0.1.0";
+            src = pkgs.lib.cleanSource ./.;
+            cargoLock.lockFile = ./Cargo.lock;
+            nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux nativeLibs;
+            buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux nativeLibs;
+            # Skip the install phase; we only want `cargo test` from checkPhase.
+            doInstallCargoBinaries = false;
+            installPhase = "touch $out";
+          };
+
+          devShells.default = pkgs.mkShell {
+            buildInputs = [
+              pkgs.cargo
+              pkgs.rustc
+              pkgs.clippy
+              pkgs.rustfmt
+            ]
+            ++ nativeLibs;
+          };
+
+          apps.default = {
+            type = "app";
+            program = "${wayclick}/bin/wayclick";
+          };
+
+          formatter = pkgs.writeShellScriptBin "wayclick-fmt" ''
+            set -euo pipefail
+            cargo fmt --all
+            ${pkgs.nixpkgs-fmt}/bin/nixpkgs-fmt flake.nix
+            ${pkgs.prettier}/bin/prettier --write \
+              "template/**/*.json" ".github/**/*.yml"
+          '';
+        };
+    in
+    let
+      lib = nixpkgs.lib;
+      mk = attr: lib.genAttrs systems (s: (perSystem s).${attr});
+    in
+    {
+      packages = mk "packages";
+      checks = mk "checks";
+      devShells = mk "devShells";
+      apps = mk "apps";
+      formatter = mk "formatter";
     };
 }

@@ -1,0 +1,59 @@
+[package]
+name = "wayclick"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+futures = "0.3"
+
+# Audio
+rodio = { version = "0.22", default-features = false, features = ["playback", "hound"] }
+
+# Config / serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Errors / logging
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# RNG (SmallRng for default-sound choice)
+rand = { version = "0.8", features = ["small_rng"] }
+
+# Platform identity checks (geteuid on Linux)
+libc = "0.2"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Linux backend
+evdev = { version = "0.13", features = ["tokio", "stream-trait"] }
+tokio-stream = "0.1"
+
+# Windows backend
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+] }
+
+# macOS backend
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes"] }
+objc2-core-foundation = { version = "0.3", features = ["CFMachPort", "CFRunLoop"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "test-util"] }
+
+[[bin]]
+name = "wayclick"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
