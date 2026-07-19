@@ -24,19 +24,13 @@ a = Analysis(
         'pywintypes',
         'ctypes',
         'ctypes.wintypes',
-        'input_handler',
-        'linux_input',
-        'windows_input',
-        'macos_input',
+        # input_handler / linux_input / windows_input / macos_input are injected
+        # by hook-runner_cross_platform.py (derived from LISTENERS).
     ],
     hookspath=['src'],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False,
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)

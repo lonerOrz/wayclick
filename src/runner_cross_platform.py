@@ -5,9 +5,6 @@ import pygame
 from platform_paths import config_dir
 
 # ANSI Colors (Windows compatible)
-C_GREEN = "\033[1;32m"
-C_YELLOW = "\033[1;33m"
-C_BLUE = "\033[1;34m"
 C_RED = "\033[1;31m"
 C_RESET = "\033[0m"
 
