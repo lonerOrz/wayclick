@@ -1,58 +1,23 @@
 # input_handler.py
 import platform
 
-current_platform = platform.system().lower()
+from linux_input import LinuxInputListener
+from windows_input import WindowsInputListener
+from macos_input import MacOSInputListener
+
+LISTENERS = {
+    "linux": LinuxInputListener,
+    "windows": WindowsInputListener,
+    "darwin": MacOSInputListener,
+}
 
 
 class InputHandler:
-    def __init__(self, play_sound_callback, enable_trackpads=False):
+    def __init__(self, play_sound_callback, enable_trackpads=False, system=None):
         self.play_sound = play_sound_callback
-        self.current_platform = current_platform
         self.enable_trackpads = enable_trackpads
-
-        if self.current_platform == "linux":
-            import evdev
-            from evdev import ecodes
-
-            self.evdev = evdev
-            self.ecodes = ecodes
-        elif self.current_platform == "windows":
-            import ctypes
-            from ctypes import wintypes
-
-            self.ctypes = ctypes
-            self.wintypes = wintypes
-        elif self.current_platform == "darwin":  # macOS
-            import Quartz
-
-            self.Quartz = Quartz
+        self.current_platform = (system or platform.system()).lower()
+        self.Listener = LISTENERS[self.current_platform]
 
     def start_listening(self):
-        if self.current_platform == "linux":
-            return self._start_linux()
-        elif self.current_platform == "windows":
-            return self._start_windows()
-        elif self.current_platform == "darwin":
-            return self._start_macos()
-
-    def _start_linux(self):
-        import asyncio
-        import signal
-        from linux_input import LinuxInputListener
-
-        listener = LinuxInputListener(
-            self.play_sound, self.evdev, self.ecodes, self.enable_trackpads
-        )
-        return listener.run()
-
-    def _start_windows(self):
-        from windows_input import WindowsInputListener
-
-        listener = WindowsInputListener(self.play_sound, self.ctypes, self.wintypes)
-        return listener.run()
-
-    def _start_macos(self):
-        from macos_input import MacOSInputListener
-
-        listener = MacOSInputListener(self.play_sound, self.Quartz)
-        return listener.run()
+        return self.Listener(self.play_sound, self.enable_trackpads).run()

@@ -2,9 +2,12 @@
 import asyncio
 import signal
 
+import evdev
+from evdev import ecodes
+
 
 class LinuxInputListener:
-    def __init__(self, play_sound_callback, evdev, ecodes, enable_trackpads=False):
+    def __init__(self, play_sound_callback, enable_trackpads=False):
         self.play_sound = play_sound_callback
         self.evdev = evdev
         self.ecodes = ecodes

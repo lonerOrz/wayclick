@@ -70,12 +70,12 @@ class TestKeyMapParsing(unittest.TestCase):
 class TestTrackpadFilter(unittest.TestCase):
     def _listener(self, enable_trackpads):
         fake_evdev = mock.MagicMock()
-        fake_ecodes = mock.MagicMock()
-        from linux_input import LinuxInputListener
+        with mock.patch.dict(
+            "sys.modules", {"evdev": fake_evdev, "evdev.ecodes": mock.MagicMock()}
+        ):
+            from linux_input import LinuxInputListener
 
-        return LinuxInputListener(
-            lambda c: None, fake_evdev, fake_ecodes, enable_trackpads=enable_trackpads
-        )
+            return LinuxInputListener(lambda c: None, enable_trackpads=enable_trackpads)
 
     def test_trackpad_skipped_when_disabled(self):
         l = self._listener(enable_trackpads=False)
@@ -92,18 +92,45 @@ class TestTrackpadFilter(unittest.TestCase):
 
 
 class TestInputHandlerFlag(unittest.TestCase):
-    def test_enable_trackpads_passed_through(self):
-        import input_handler
-
-        fake_platform = mock.MagicMock()
-        fake_platform.system.return_value = "linux"
-        input_handler.platform = fake_platform
+    def _handler(self, system, **kw):
         fake_evdev = mock.MagicMock()
+        fake_quartz = mock.MagicMock()
         with mock.patch.dict(
-            "sys.modules", {"evdev": fake_evdev, "evdev.ecodes": mock.MagicMock()}
+            "sys.modules",
+            {
+                "evdev": fake_evdev,
+                "evdev.ecodes": mock.MagicMock(),
+                "Quartz": fake_quartz,
+            },
         ):
-            h = input_handler.InputHandler(lambda c: None, enable_trackpads=True)
+            import input_handler
+
+            return input_handler, input_handler.InputHandler(
+                lambda c: None, system=system, **kw
+            )
+
+    def test_enable_trackpads_passed_through(self):
+        mod, h = self._handler("linux", enable_trackpads=True)
         self.assertTrue(h.enable_trackpads)
+        self.assertIs(h.Listener, mod.LinuxInputListener)
+
+    def test_platform_selects_adapter(self):
+        fake_evdev = mock.MagicMock()
+        fake_quartz = mock.MagicMock()
+        with mock.patch.dict(
+            "sys.modules",
+            {
+                "evdev": fake_evdev,
+                "evdev.ecodes": mock.MagicMock(),
+                "Quartz": fake_quartz,
+            },
+        ):
+            import input_handler
+
+            win_h = input_handler.InputHandler(lambda c: None, system="windows")
+            darwin_h = input_handler.InputHandler(lambda c: None, system="darwin")
+        self.assertIs(win_h.Listener, input_handler.WindowsInputListener)
+        self.assertIs(darwin_h.Listener, input_handler.MacOSInputListener)
 
 
 if __name__ == "__main__":
