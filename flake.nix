@@ -27,6 +27,18 @@
             pkgs.libevdev
           ];
 
+          # macOS needs the CoreGraphics/CoreFoundation frameworks for the objc2
+          # CGEventTap backend (sandboxed Nix builds link against these).
+          darwinFrameworks = pkgs.lib.optionals pkgs.stdenv.isDarwin (
+            with pkgs.darwin.apple_sdk.frameworks;
+            [
+              CoreGraphics
+              CoreFoundation
+            ]
+          );
+
+          darwinInputs = pkgs.lib.optionals pkgs.stdenv.isDarwin darwinFrameworks;
+
           wayclick = pkgs.rustPlatform.buildRustPackage {
             pname = "wayclick";
             version = "0.1.0";
@@ -34,8 +46,12 @@
 
             cargoLock.lockFile = ./Cargo.lock;
 
-            nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux nativeLibs;
-            buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux nativeLibs;
+            nativeBuildInputs =
+              pkgs.lib.optionals pkgs.stdenv.isLinux nativeLibs
+              ++ darwinInputs;
+            buildInputs =
+              pkgs.lib.optionals pkgs.stdenv.isLinux nativeLibs
+              ++ darwinInputs;
 
             postInstall = ''
               mkdir -p $out/share/wayclick
@@ -55,8 +71,12 @@
             version = "0.1.0";
             src = pkgs.lib.cleanSource ./.;
             cargoLock.lockFile = ./Cargo.lock;
-            nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux nativeLibs;
-            buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux nativeLibs;
+            nativeBuildInputs =
+              pkgs.lib.optionals pkgs.stdenv.isLinux nativeLibs
+              ++ darwinInputs;
+            buildInputs =
+              pkgs.lib.optionals pkgs.stdenv.isLinux nativeLibs
+              ++ darwinInputs;
             # Skip the install phase; we only want `cargo test` from checkPhase.
             doInstallCargoBinaries = false;
             installPhase = "touch $out";

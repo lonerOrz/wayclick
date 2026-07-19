@@ -36,7 +36,7 @@ mod imp {
     use std::sync::mpsc as std_mpsc;
     use std::time::Duration;
 
-    use futures::stream::{BoxStream, StreamExt};
+    use futures::stream::{BoxStream, Stream, StreamExt};
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
 
@@ -152,12 +152,57 @@ mod imp {
         }
     }
 
+    /// Stream wrapper that clears the global `SENDER` when dropped, so a dropped
+    /// stream (or a failed start) can't leave a stale sender for a lingering tap
+    /// thread.
+    struct GuardedStream {
+        inner: ReceiverStream<InputEvent>,
+    }
+
+    impl GuardedStream {
+        fn new(rx: mpsc::Receiver<InputEvent>) -> Self {
+            GuardedStream {
+                inner: ReceiverStream::new(rx),
+            }
+        }
+    }
+
+    impl Stream for GuardedStream {
+        type Item = InputEvent;
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<InputEvent>> {
+            // SAFETY: no structural pinning of `inner` required.
+            let inner = unsafe { self.map_unchecked_mut(|s| &mut s.inner) };
+            inner.poll_next(cx)
+        }
+    }
+
+    impl Drop for GuardedStream {
+        fn drop(&mut self) {
+            if let Ok(mut guard) = SENDER.lock() {
+                *guard = None;
+            }
+        }
+    }
+
     impl InputBackend for MacosBackend {
         fn events(&mut self) -> Result<BoxStream<'static, InputEvent>, BackendError> {
             let (tx, rx) = mpsc::channel::<InputEvent>(1024);
-            *SENDER
-                .lock()
-                .map_err(|_| BackendError::Start("sender lock poisoned".into()))? = Some(tx);
+
+            // Guard against a second `events()` call while the previous tap thread
+            // is still alive: it would overwrite SENDER and the old thread would
+            // keep pushing into the new channel (double-play). Reject, don't stack.
+            {
+                let mut guard = SENDER
+                    .lock()
+                    .map_err(|_| BackendError::Start("sender lock poisoned".into()))?;
+                if guard.is_some() {
+                    return Err(BackendError::Start("backend already running".into()));
+                }
+                *guard = Some(tx);
+            }
 
             let (ready_tx, ready_rx) = std_mpsc::channel::<Result<(), BackendError>>();
 
@@ -169,7 +214,7 @@ mod imp {
             match ready_rx.recv_timeout(Duration::from_secs(5)) {
                 Ok(Ok(())) => {
                     tracing::info!("macOS CGEventTap started");
-                    Ok(ReceiverStream::new(rx).boxed())
+                    Ok(GuardedStream::new(rx).boxed())
                 }
                 Ok(Err(e)) => Err(e),
                 Err(_) => Err(BackendError::Start(

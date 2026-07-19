@@ -55,7 +55,7 @@ impl InputBackend for WindowsBackend {
 mod windows_impl {
     use std::sync::Mutex;
 
-    use futures::stream::{BoxStream, StreamExt};
+    use futures::stream::{BoxStream, Stream, StreamExt};
     use tokio::sync::mpsc::{self, Sender};
     use tokio_stream::wrappers::ReceiverStream;
 
@@ -124,9 +124,18 @@ mod windows_impl {
     pub fn start() -> Result<BoxStream<'static, InputEvent>, BackendError> {
         let (tx, rx) = mpsc::channel::<InputEvent>(1024);
 
-        *SENDER
-            .lock()
-            .map_err(|_| BackendError::Start("sender lock poisoned".into()))? = Some(tx);
+        // Guard against a second `events()` call while the previous hook thread
+        // is still alive: it would overwrite SENDER and the old thread would keep
+        // pushing into the new channel (double-play). Reject rather than stack.
+        {
+            let mut guard = SENDER
+                .lock()
+                .map_err(|_| BackendError::Start("sender lock poisoned".into()))?;
+            if guard.is_some() {
+                return Err(BackendError::Start("backend already running".into()));
+            }
+            *guard = Some(tx);
+        }
 
         // Handshake so we surface hook-install failure from the pump thread.
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
@@ -175,7 +184,7 @@ mod windows_impl {
             .map_err(|e| BackendError::Start(format!("failed to spawn hook thread: {e}")))?;
 
         match ready_rx.recv() {
-            Ok(Ok(())) => Ok(ReceiverStream::new(rx).boxed()),
+            Ok(Ok(())) => Ok(GuardedStream::new(rx).boxed()),
             Ok(Err(msg)) => {
                 tracing::error!("{msg}");
                 Err(BackendError::Start(msg))
@@ -183,6 +192,40 @@ mod windows_impl {
             Err(_) => Err(BackendError::Start(
                 "hook thread died before installing hooks".into(),
             )),
+        }
+    }
+
+    /// Stream wrapper that clears the global `SENDER` when dropped, so a dropped
+    /// stream (or a failed start) can't leave a stale sender for a lingering hook.
+    struct GuardedStream {
+        inner: ReceiverStream<InputEvent>,
+    }
+
+    impl GuardedStream {
+        fn new(rx: mpsc::Receiver<InputEvent>) -> Self {
+            GuardedStream {
+                inner: ReceiverStream::new(rx),
+            }
+        }
+    }
+
+    impl Stream for GuardedStream {
+        type Item = InputEvent;
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<InputEvent>> {
+            // SAFETY: no structural pinning of `inner` required.
+            let inner = unsafe { self.map_unchecked_mut(|s| &mut s.inner) };
+            inner.poll_next(cx)
+        }
+    }
+
+    impl Drop for GuardedStream {
+        fn drop(&mut self) {
+            if let Ok(mut guard) = SENDER.lock() {
+                *guard = None;
+            }
         }
     }
 }
