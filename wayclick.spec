@@ -2,10 +2,16 @@
 
 from PyInstaller.utils.hooks import collect_all
 
+import sys
+
 block_cipher = None
 
-# 关键：显式收集 pywin32
-pywin32_datas, pywin32_binaries, pywin32_hidden = collect_all('pywin32')
+# pywin32 + system DLLs are Windows-only. Collect them only there so the same
+# spec builds on Linux/macOS without pywin32 installed.
+if sys.platform == "win32":
+    pywin32_datas, pywin32_binaries, pywin32_hidden = collect_all("pywin32")
+else:
+    pywin32_datas, pywin32_binaries, pywin32_hidden = [], [], []
 
 a = Analysis(
     ['src/runner_cross_platform.py'],
@@ -16,14 +22,12 @@ a = Analysis(
         *pywin32_datas,           # 包含 pywin32 的数据文件
     ],
     hiddenimports=[
-        *pywin32_hidden,          # 包含 pywin32 的隐藏导入
-        'win32api',
-        'win32con',
-        'win32gui',
-        'pythoncom',
-        'pywintypes',
+        *pywin32_hidden,          # 包含 pywin32 的隐藏导入（仅 Windows）
         'ctypes',
         'ctypes.wintypes',
+        # Windows-only pywin32 modules: only present on Windows.
+        *(['win32api', 'win32con', 'win32gui', 'pythoncom', 'pywintypes']
+          if sys.platform == "win32" else []),
         # input_handler / linux_input / windows_input / macos_input are injected
         # by hook-runner_cross_platform.py (derived from LISTENERS).
     ],

@@ -56,5 +56,50 @@
           };
         }
       );
+
+      # `nix build` / `nix run .#wayclick` — packages the engine from src.
+      packages = forEachSystem (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          python = pkgs.python310;
+        in
+        {
+          default = pkgs.stdenv.mkDerivation {
+            pname = "wayclick";
+            version = "0.1";
+
+            src = pkgs.lib.cleanSource ./.;
+
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            propagatedBuildInputs =
+              [ pkgs.python310Packages.pygame-ce ]
+              ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.python310Packages.evdev ];
+
+            buildPhase = ''
+              mkdir -p $out/lib/wayclick
+              cp -r src/* $out/lib/wayclick/
+              # Skip __pycache__ copied from the working tree.
+              rm -rf $out/lib/wayclick/__pycache__
+              cp -r template $out/lib/wayclick/template
+            '';
+
+            installPhase = ''
+              mkdir -p $out/bin
+              cat > $out/bin/wayclick <<EOF
+              #!/bin/sh
+              export PYTHONPATH=$out/lib/wayclick:\''\${PYTHONPATH:+:\$PYTHONPATH}
+              exec ${python}/bin/python3 -m runner_cross_platform "\$@"
+              EOF
+              chmod +x $out/bin/wayclick
+            '';
+
+            meta = {
+              description = "Low-latency input sound engine";
+              mainProgram = "wayclick";
+            };
+          };
+        }
+      );
     };
 }
