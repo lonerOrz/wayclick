@@ -10,18 +10,11 @@ C_BLUE = "\033[1;34m"
 C_RED = "\033[1;31m"
 C_RESET = "\033[0m"
 
-# Determine the config directory based on the platform
-current_platform = platform.system().lower()
-
-if current_platform == "linux":
-    CONFIG_DIR = os.path.expanduser("~/.config/wayclick")
-elif current_platform == "windows":
-    CONFIG_DIR = os.path.expanduser("~\\.wayclick")
-elif current_platform == "darwin":  # macOS
-    CONFIG_DIR = os.path.expanduser("~/.config/wayclick")
-else:
-    # Default fallback
-    CONFIG_DIR = os.path.expanduser("~/.config/wayclick")
+# Determine the config directory based on the platform.
+# Windows stores config in its own profile-root layout; *nix use XDG-style.
+CONFIG_DIR = os.path.expanduser(
+    "~\\.wayclick" if platform.system().lower() == "windows" else "~/.config/wayclick"
+)
 
 # Allow override via command line argument
 if len(sys.argv) > 1:

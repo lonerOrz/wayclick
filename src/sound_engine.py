@@ -7,7 +7,7 @@ MAX_KEYCODE = 65536
 
 
 class SoundEngine:
-    def __init__(self, asset_dir, mixer, enable_trackpads=False):
+    def __init__(self, asset_dir, mixer):
         self.asset_dir = asset_dir
         self.mixer = mixer
 
