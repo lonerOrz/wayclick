@@ -1,6 +1,8 @@
 # macos_input.py
 import Quartz
 
+from codes import BUTTON_CODES
+
 
 class MacOSInputListener:
     def __init__(self, play_sound_callback, quartz_module):
@@ -26,16 +28,10 @@ class MacOSInputListener:
             button_number = Quartz.CGEventGetIntegerValueField(
                 event, Quartz.kCGMouseEventButtonNumber
             )
-            if button_number == 0:  # Left button
-                button_code = 0x01
-            elif button_number == 1:  # Right button
-                button_code = 0x02
-            elif button_number == 2:  # Middle button
-                button_code = 0x04
-            else:
-                button_code = 0x05  # Other buttons
-
-            self.play_sound(button_code)
+            button_name = {0: "left", 1: "right", 2: "middle"}.get(
+                button_number, "other"
+            )
+            self.play_sound(BUTTON_CODES[button_name])
 
         return event
 

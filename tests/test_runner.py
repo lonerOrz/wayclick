@@ -133,5 +133,27 @@ class TestInputHandlerFlag(unittest.TestCase):
         self.assertIs(darwin_h.Listener, input_handler.MacOSInputListener)
 
 
+class TestButtonCodes(unittest.TestCase):
+    def test_single_source_of_truth(self):
+        import codes
+
+        self.assertEqual(
+            codes.BUTTON_CODES,
+            {"left": 0x01, "right": 0x02, "middle": 0x04, "other": 0x05},
+        )
+
+    def test_macos_adapter_uses_shared_table(self):
+        fake_quartz = mock.MagicMock()
+        fake_quartz.kCGEventKeyDown = 10
+        fake_quartz.kCGEventKeyUp = 11
+        fake_quartz.kCGEventLeftMouseDown = 1
+        fake_quartz.kCGEventRightMouseDown = 2
+        fake_quartz.kCGEventOtherMouseDown = 3
+        with mock.patch.dict("sys.modules", {"Quartz": fake_quartz}):
+            import macos_input
+
+            self.assertIs(macos_input.BUTTON_CODES, __import__("codes").BUTTON_CODES)
+
+
 if __name__ == "__main__":
     unittest.main()

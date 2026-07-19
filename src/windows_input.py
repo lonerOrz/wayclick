@@ -2,6 +2,8 @@
 import ctypes
 import time
 
+from codes import BUTTON_CODES
+
 
 class WindowsInputListener:
     def __init__(self, play_sound_callback, ctypes_module, wintypes_module):
@@ -42,16 +44,13 @@ class WindowsInputListener:
             self.WM_XBUTTONDOWN,
         ):
             # Map mouse buttons to codes
-            if wParam == self.WM_LBUTTONDOWN:
-                button_code = 0x01  # Left mouse button
-            elif wParam == self.WM_RBUTTONDOWN:
-                button_code = 0x02  # Right mouse button
-            elif wParam == self.WM_MBUTTONDOWN:
-                button_code = 0x04  # Middle mouse button
-            else:  # WM_XBUTTONDOWN
-                button_code = 0x05  # Extra mouse button
-
-            self.play_sound(button_code)
+            button_name = {
+                self.WM_LBUTTONDOWN: "left",
+                self.WM_RBUTTONDOWN: "right",
+                self.WM_MBUTTONDOWN: "middle",
+                self.WM_XBUTTONDOWN: "other",
+            }[wParam]
+            self.play_sound(BUTTON_CODES[button_name])
 
         return self.user32.CallNextHookEx(self.hhook_mouse, nCode, wParam, lParam)
 
