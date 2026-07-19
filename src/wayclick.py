@@ -10,13 +10,6 @@ RUNNER = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "runner_cross_platform.py"
 )
 
-system = platform.system().lower()
-
-if system == "darwin":
-    CONFIG_DIR = os.path.expanduser("~/Library/Application Support/wayclick")
-else:
-    CONFIG_DIR = os.path.expanduser("~/.config/wayclick")
-
 
 def notify(title, body):
     subprocess.run(
@@ -39,6 +32,13 @@ def is_running():
 
 
 def main():
+    system = platform.system().lower()
+    config_dir = (
+        os.path.expanduser("~/Library/Application Support/wayclick")
+        if system == "darwin"
+        else os.path.expanduser("~/.config/wayclick")
+    )
+
     # Root check (only meaningful on Linux)
     if system == "linux" and os.geteuid() == 0:
         print("Do not run as root")
@@ -60,14 +60,14 @@ def main():
             return 1
 
     # Config check
-    if not os.path.isfile(os.path.join(CONFIG_DIR, "config.json")):
-        notify("WayClick", f"Missing config file at {CONFIG_DIR}/config.json")
+    if not os.path.isfile(os.path.join(config_dir, "config.json")):
+        notify("WayClick", f"Missing config file at {config_dir}/config.json")
         return 1
 
     notify("WayClick", "Enabled")
     env = dict(os.environ, ENABLE_TRACKPADS=CONFIG_ENABLE_TRACKPADS)
     python = os.environ.get("PYTHON", "python3")
-    return subprocess.run([python, "-O", RUNNER, CONFIG_DIR], env=env).returncode
+    return subprocess.run([python, "-O", RUNNER, config_dir], env=env).returncode
 
 
 if __name__ == "__main__":

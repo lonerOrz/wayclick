@@ -25,7 +25,6 @@
         pkgs.writeShellScriptBin "fmt" ''
           set -euo pipefail
           ${pkgs.black}/bin/black src tests template .github
-          ${pkgs.shfmt}/bin/shfmt -l -w src/wayclick.sh
           ${pkgs.prettier}/bin/prettier --write "**/*.{json,yaml,yml,md}"
           ${pkgs.nixpkgs-fmt}/bin/nixpkgs-fmt flake.nix
         ''
@@ -44,7 +43,6 @@
                 python310
                 python310Packages.pygame-ce
                 python310Packages.pyinstaller
-                shfmt
                 prettier
               ]
               ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
@@ -53,7 +51,7 @@
 
             shellHook = ''
               echo "WayClick development environment ready!"
-              echo "Format:  black src tests template .github && shfmt -l -w src/wayclick.sh && prettier --write '**/*.{json,yaml,yml,md}'"
+              echo "Format:  nix fmt   (black src tests template .github && prettier '**/*.{json,yaml,yml,md}')"
             '';
           };
         }
