@@ -14,7 +14,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::audio::{AudioEngine, NullEngine, RodioEngine};
+use crate::audio::{AudioEngine, RodioEngine};
 use crate::backend::for_current_platform;
 use crate::config::{ConfigSource, FileConfigSource};
 use crate::domain::SoundId;
@@ -52,39 +52,36 @@ impl App {
             match RodioEngine::from_dir(&self.config_dir, &config.sounds, self.buffer_frames) {
                 Ok(e) => Arc::new(e) as Arc<dyn AudioEngine>,
                 Err(e) => {
-                    // No audio device (e.g. headless WSL, unplugged card). Degrade to
-                    // silent monitoring instead of crashing the whole input listener.
-                    tracing::warn!(
-                        error = %e,
-                        "failed to start audio engine; running in SILENT MONITORING mode (no sound)"
-                    );
+                    tracing::error!(error = %e, "failed to start audio engine");
                     eprintln!(
-                        "wayclick: no audio output device — running silent. \
-                         Set up ALSA→PulseAudio (WSLg) or a sound card for sound."
+                        "wayclick: cannot open an audio output device. \
+                         Is a sound card / PulseAudio running? (try `wayclick check` for a headless self-test)"
                     );
-                    Arc::new(NullEngine) as Arc<dyn AudioEngine>
+                    return 1;
                 }
             };
 
         let pipeline = Arc::new(Pipeline::new(config, engine, self.enable_trackpads));
 
-        tracing::info!("wayclick listening");
+        let mut backend = for_current_platform(self.enable_trackpads);
+        let stream = match backend.events() {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(backend = backend.name(), error = %e, "failed to start input backend");
+                return 1;
+            }
+        };
+
+        tracing::info!(backend = backend.name(), "wayclick listening");
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .expect("tokio runtime");
         rt.block_on(async move {
-            let mut backend = for_current_platform(self.enable_trackpads);
-            let stream = match backend.events() {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!(backend = backend.name(), error = %e, "failed to start input backend");
-                    return 1;
-                }
-            };
             pipeline.run(stream).await;
-            0
-        })
+        });
+
+        0
     }
 
     /// Headless self-check: load config + decode audio, report, exit.
