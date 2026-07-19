@@ -53,6 +53,10 @@ impl App {
                 Ok(e) => Arc::new(e) as Arc<dyn AudioEngine>,
                 Err(e) => {
                     tracing::error!(error = %e, "failed to start audio engine");
+                    eprintln!(
+                        "wayclick: cannot open an audio output device. \
+                         Is a sound card / PulseAudio running? (try `wayclick check` for a headless self-test)"
+                    );
                     return 1;
                 }
             };
