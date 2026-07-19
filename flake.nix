@@ -23,6 +23,7 @@
           nativeLibs = [
             pkgs.pkg-config
             pkgs.alsa-lib
+            pkgs.alsa-plugins
             pkgs.udev
             pkgs.libevdev
           ];

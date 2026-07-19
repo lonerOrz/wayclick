@@ -22,3 +22,13 @@ pub trait AudioEngine: Send + Sync {
     #[allow(dead_code)]
     fn stop(&self);
 }
+
+/// No-op engine used when no audio device is available. Keeps the input
+/// listener alive (a daemon shouldn't crash because a sound card was unplugged)
+/// while playing nothing.
+pub struct NullEngine;
+
+impl AudioEngine for NullEngine {
+    fn play(&self, _id: SoundId) {}
+    fn stop(&self) {}
+}
