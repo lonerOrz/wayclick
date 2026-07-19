@@ -2,9 +2,9 @@
 //!
 //! `Pipeline` owns the `CompiledConfig` rules, the default sound ids, and the
 //! metrics counters. It pulls `InputEvent`s from a backend stream and drives
-//! them to the `Executor`. Metrics live HERE (not in the executor) so a single
-//! counter set covers the whole flow. The audio engine owns sample decoding, so
-//! the pipeline only deals in `SoundId`s (no `AudioCache` lookups on the hot path).
+//! them to the audio `engine`. Metrics live HERE so a single counter set covers
+//! the whole flow. The audio engine owns sample decoding, so the pipeline only
+//! deals in `SoundId`s (no `AudioCache` lookups on the hot path).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,7 +14,6 @@ use futures::StreamExt;
 use crate::audio::AudioEngine;
 use crate::config::CompiledConfig;
 use crate::domain::{Action, CompiledRule, InputEvent, SoundId};
-use crate::executor::Executor;
 
 /// Counters for the whole pipeline. `AtomicU64` — no locks, cheap to bump from
 /// many tasks. Read by `check` / a future metrics endpoint.
@@ -30,7 +29,7 @@ pub struct Metrics {
 pub struct Pipeline {
     rules: Vec<CompiledRule>,
     default_ids: Vec<SoundId>,
-    executor: Executor,
+    engine: Arc<dyn AudioEngine>,
     metrics: Arc<Metrics>,
     enable_trackpads: bool,
 }
@@ -45,7 +44,7 @@ impl Pipeline {
         Pipeline {
             rules: config.rules,
             default_ids,
-            executor: Executor::new(engine),
+            engine,
             metrics: Arc::new(Metrics::default()),
             enable_trackpads,
         }
@@ -76,14 +75,14 @@ impl Pipeline {
             for action in &rule.actions {
                 let Action::PlaySound(id) = action;
                 self.metrics.played.fetch_add(1, Ordering::Relaxed);
-                self.executor.play(*id);
+                self.engine.play(*id);
             }
         } else if !self.default_ids.is_empty() {
             // No explicit mapping: play a random default.
             self.metrics.mapped.fetch_add(1, Ordering::Relaxed);
             self.metrics.played.fetch_add(1, Ordering::Relaxed);
             let id = self.default_ids[fastrand(self.default_ids.len())];
-            self.executor.play(id);
+            self.engine.play(id);
         }
     }
 

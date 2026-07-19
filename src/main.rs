@@ -15,7 +15,6 @@ mod audio;
 mod backend;
 mod config;
 mod domain;
-mod executor;
 mod pipeline;
 
 #[derive(Parser)]

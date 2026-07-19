@@ -1,7 +1,9 @@
 /target
-/result
-/result-*
 **/*.rs.bk
+
 .envrc
 .direnv/
+/result
+/result-*
+
 .DS_Store
