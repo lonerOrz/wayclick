@@ -1,14 +1,14 @@
 from PyInstaller.utils.hooks import collect_submodules
 
+import input_handler
+
 hiddenimports = collect_submodules(".")
 
-# Explicitly add the modules that are imported dynamically
+# Derive the platform adapters from the single registry so a new adapter is
+# auto-included. input_handler itself plus Windows-only ctypes deps stay explicit.
+hiddenimports += ["input_handler"]
+hiddenimports += [listener.__module__ for listener in input_handler.LISTENERS.values()]
 hiddenimports += [
-    "input_handler",
-    "linux_input",
-    "windows_input",
-    "macos_input",
-    # Add Windows-specific modules that might be needed
     "ctypes",
     "ctypes.wintypes",
 ]

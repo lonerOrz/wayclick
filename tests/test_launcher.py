@@ -1,5 +1,6 @@
 import os
 import sys
+import importlib.util
 import unittest
 from unittest import mock
 
@@ -158,6 +159,63 @@ class TestProcessManager(unittest.TestCase):
 
         pm = process_manager.ProcessManager(runner_pattern="custom.*pattern")
         self.assertEqual(pm.runner_pattern, "custom.*pattern")
+
+
+class TestPyInstallerHook(unittest.TestCase):
+    def _load_hook(self):
+        # Stub PyInstaller (not installed in dev) and platform-specific deps so
+        # the hook module loads and derives hidden imports from LISTENERS.
+        hooks = mock.MagicMock()
+        hooks.collect_submodules.return_value = []
+        hooks.collect_dynamic_libs.return_value = []
+        with mock.patch.dict(
+            "sys.modules",
+            {
+                "PyInstaller": mock.MagicMock(),
+                "PyInstaller.utils": mock.MagicMock(),
+                "PyInstaller.utils.hooks": hooks,
+                "evdev": mock.MagicMock(),
+                "evdev.ecodes": mock.MagicMock(),
+                "Quartz": mock.MagicMock(),
+            },
+        ):
+            spec = importlib.util.spec_from_file_location(
+                "hook_wayclick",
+                os.path.join(
+                    os.path.dirname(__file__),
+                    "..",
+                    "src",
+                    "hook-runner_cross_platform.py",
+                ),
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        return mod
+
+    def test_hidden_imports_derive_from_registry(self):
+        mod = self._load_hook()
+        for name in ("input_handler", "linux_input", "windows_input", "macos_input"):
+            self.assertIn(name, mod.hiddenimports)
+        self.assertIn("ctypes", mod.hiddenimports)
+
+    def test_hidden_imports_track_new_adapter(self):
+        # If LISTENERS ever gains an adapter, the hook must pick it up
+        # without a manual edit — proven by deriving from the live registry.
+        with mock.patch.dict(
+            "sys.modules",
+            {
+                "evdev": mock.MagicMock(),
+                "evdev.ecodes": mock.MagicMock(),
+                "Quartz": mock.MagicMock(),
+            },
+        ):
+            import input_handler
+
+            mod = self._load_hook()
+            derived = {
+                listener.__module__ for listener in input_handler.LISTENERS.values()
+            }
+        self.assertTrue(derived.issubset(set(mod.hiddenimports)))
 
 
 if __name__ == "__main__":
