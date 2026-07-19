@@ -97,5 +97,21 @@ class TestLauncher(unittest.TestCase):
         self.assertEqual(rc, 0)
 
 
+class TestPlatformPaths(unittest.TestCase):
+    def test_single_source_of_truth(self):
+        from platform_paths import config_dir
+        import os
+
+        self.assertEqual(
+            config_dir("darwin"),
+            os.path.expanduser("~/Library/Application Support/wayclick"),
+        )
+        self.assertEqual(config_dir("windows"), os.path.expanduser("~\\.wayclick"))
+        self.assertEqual(config_dir("linux"), os.path.expanduser("~/.config/wayclick"))
+        self.assertEqual(
+            config_dir("freebsd"), os.path.expanduser("~/.config/wayclick")
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

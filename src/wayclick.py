@@ -5,6 +5,8 @@ import platform
 import subprocess
 import sys
 
+from platform_paths import config_dir as resolve_config_dir
+
 CONFIG_ENABLE_TRACKPADS = "false"
 RUNNER = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "runner_cross_platform.py"
@@ -33,11 +35,7 @@ def is_running():
 
 def main():
     system = platform.system().lower()
-    config_dir = (
-        os.path.expanduser("~/Library/Application Support/wayclick")
-        if system == "darwin"
-        else os.path.expanduser("~/.config/wayclick")
-    )
+    config_dir = resolve_config_dir(system)
 
     # Root check (only meaningful on Linux)
     if system == "linux" and os.geteuid() == 0:
