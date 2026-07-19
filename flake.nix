@@ -40,13 +40,13 @@
             buildInputs =
               with pkgs;
               [
-                python310
-                python310Packages.pygame-ce
-                python310Packages.pyinstaller
+                python311
+                python311Packages.pygame-ce
+                python311Packages.pyinstaller
                 prettier
               ]
               ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
-                python310Packages.evdev
+                python311Packages.evdev
               ];
 
             shellHook = ''
@@ -62,7 +62,7 @@
         system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          python = pkgs.python310;
+          python = pkgs.python311;
         in
         {
           default = pkgs.stdenv.mkDerivation {
@@ -73,8 +73,8 @@
 
             nativeBuildInputs = [ pkgs.makeWrapper ];
             propagatedBuildInputs =
-              [ pkgs.python310Packages.pygame-ce ]
-              ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.python310Packages.evdev ];
+              [ pkgs.python311Packages.pygame-ce ]
+              ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.python311Packages.evdev ];
 
             buildPhase = ''
               mkdir -p $out/lib/wayclick
