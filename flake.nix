@@ -91,6 +91,12 @@
               pkgs.rustfmt
             ]
             ++ nativeLibs;
+            # Point libasound at the pulse plugin so cpal's ALSA backend can bridge
+            # to WSLg/PulseAudio (no ALSA hardware in WSL). Needs a ~/.asoundrc
+            # with `pcm.!default { type pulse }`.
+            shellHook = pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+              export ALSA_PLUGIN_DIR="${pkgs.alsa-plugins}/lib/alsa-lib"
+            '';
           };
 
           apps.default = {
