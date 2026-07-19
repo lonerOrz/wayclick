@@ -53,10 +53,8 @@ impl InputBackend for WindowsBackend {
 
 #[cfg(windows)]
 mod windows_impl {
-    use std::sync::Mutex;
-
-    use futures::stream::{BoxStream, Stream, StreamExt};
-    use tokio::sync::mpsc::{self, Sender};
+    use futures::stream::BoxStream;
+    use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
 
     use windows_sys::Win32::Foundation::{GetLastError, HINSTANCE, LPARAM, LRESULT, WPARAM};
@@ -66,23 +64,8 @@ mod windows_impl {
         WM_SYSKEYDOWN, WM_XBUTTONDOWN,
     };
 
-    use crate::backend::BackendError;
+    use crate::backend::{BackendError, CHANNEL_CAP, GuardedSenderStream, emit, try_start_sender};
     use crate::domain::{InputEvent, MouseButton};
-
-    /// The single sink the hook callbacks push into. Callbacks are free
-    /// `extern "system"` functions and cannot capture, so the sender lives here.
-    /// `Option` (not `OnceLock`) so the backend is re-entrant: a fresh `start()`
-    /// replaces the sender, and shutdown clears it.
-    static SENDER: Mutex<Option<Sender<InputEvent>>> = Mutex::new(None);
-
-    fn emit(event: InputEvent) {
-        if let Ok(guard) = SENDER.lock() {
-            if let Some(tx) = guard.as_ref() {
-                // Bounded channel: drop on full rather than block the hook.
-                let _ = tx.try_send(event);
-            }
-        }
-    }
 
     unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if code >= 0 {
@@ -122,20 +105,8 @@ mod windows_impl {
     }
 
     pub fn start() -> Result<BoxStream<'static, InputEvent>, BackendError> {
-        let (tx, rx) = mpsc::channel::<InputEvent>(1024);
-
-        // Guard against a second `events()` call while the previous hook thread
-        // is still alive: it would overwrite SENDER and the old thread would keep
-        // pushing into the new channel (double-play). Reject rather than stack.
-        {
-            let mut guard = SENDER
-                .lock()
-                .map_err(|_| BackendError::Start("sender lock poisoned".into()))?;
-            if guard.is_some() {
-                return Err(BackendError::Start("backend already running".into()));
-            }
-            *guard = Some(tx);
-        }
+        let (tx, rx) = mpsc::channel::<InputEvent>(CHANNEL_CAP);
+        try_start_sender(tx)?;
 
         // Handshake so we surface hook-install failure from the pump thread.
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
@@ -184,7 +155,7 @@ mod windows_impl {
             .map_err(|e| BackendError::Start(format!("failed to spawn hook thread: {e}")))?;
 
         match ready_rx.recv() {
-            Ok(Ok(())) => Ok(GuardedStream::new(rx).boxed()),
+            Ok(Ok(())) => Ok(GuardedSenderStream::new(ReceiverStream::new(rx)).boxed()),
             Ok(Err(msg)) => {
                 tracing::error!("{msg}");
                 Err(BackendError::Start(msg))
@@ -192,40 +163,6 @@ mod windows_impl {
             Err(_) => Err(BackendError::Start(
                 "hook thread died before installing hooks".into(),
             )),
-        }
-    }
-
-    /// Stream wrapper that clears the global `SENDER` when dropped, so a dropped
-    /// stream (or a failed start) can't leave a stale sender for a lingering hook.
-    struct GuardedStream {
-        inner: ReceiverStream<InputEvent>,
-    }
-
-    impl GuardedStream {
-        fn new(rx: mpsc::Receiver<InputEvent>) -> Self {
-            GuardedStream {
-                inner: ReceiverStream::new(rx),
-            }
-        }
-    }
-
-    impl Stream for GuardedStream {
-        type Item = InputEvent;
-        fn poll_next(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Option<InputEvent>> {
-            // SAFETY: no structural pinning of `inner` required.
-            let inner = unsafe { self.map_unchecked_mut(|s| &mut s.inner) };
-            inner.poll_next(cx)
-        }
-    }
-
-    impl Drop for GuardedStream {
-        fn drop(&mut self) {
-            if let Ok(mut guard) = SENDER.lock() {
-                *guard = None;
-            }
         }
     }
 }

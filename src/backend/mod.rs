@@ -5,13 +5,97 @@
 //! low-level hooks / CGEventTap). `Ignored` is emitted for events we deliberately
 //! drop (trackpads, repeats) so the pipeline can count them but not play.
 
-use futures::stream::BoxStream;
-
 use crate::domain::InputEvent;
+
+// Imports for the Windows/macOS hook/tap bridge (gated: evdev uses its own path).
+#[cfg(any(windows, target_os = "macos"))]
+use futures::stream::Stream;
+#[cfg(any(windows, target_os = "macos"))]
+use std::pin::Pin;
+#[cfg(any(windows, target_os = "macos"))]
+use std::sync::Mutex;
+#[cfg(any(windows, target_os = "macos"))]
+use std::task::{Context, Poll};
+#[cfg(any(windows, target_os = "macos"))]
+use tokio::sync::mpsc::Sender;
+#[cfg(any(windows, target_os = "macos"))]
+use tokio_stream::wrappers::ReceiverStream;
 
 pub mod evdev_backend;
 pub mod macos_backend;
 pub mod windows_backend;
+
+/// Bounded channel capacity for the backend→pipeline bridge.
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) const CHANNEL_CAP: usize = 1024;
+
+/// The single sink hook/tap callbacks push into. Callbacks are free `extern`
+/// functions and cannot capture, so the sender lives in this process-global.
+/// `Option` (not `OnceLock`) so a fresh `events()` replaces it, and shutdown
+/// clears it via `GuardedSenderStream`'s `Drop`.
+///
+/// Only Windows/macOS backends use this — evdev bridges via its own task.
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) static SENDER: Mutex<Option<Sender<InputEvent>>> = Mutex::new(None);
+
+/// Forward an event into the live sender, dropping on backpressure rather than
+/// blocking the hook/tap thread.
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) fn emit(event: InputEvent) {
+    if let Ok(guard) = SENDER.lock() {
+        if let Some(tx) = guard.as_ref() {
+            let _ = tx.try_send(event);
+        }
+    }
+}
+
+/// Install a fresh sender, rejecting if one is already live. A second `events()`
+/// call while the previous hook/tap thread is alive would overwrite `SENDER` and
+/// the old thread would keep pushing into the new channel (double-play).
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) fn try_start_sender(tx: Sender<InputEvent>) -> Result<(), BackendError> {
+    let mut guard = SENDER
+        .lock()
+        .map_err(|_| BackendError::Start("sender lock poisoned".into()))?;
+    if guard.is_some() {
+        return Err(BackendError::Start("backend already running".into()));
+    }
+    *guard = Some(tx);
+    Ok(())
+}
+
+/// Stream wrapper that clears the global `SENDER` when dropped, so a dropped
+/// stream (or a failed start) can't leave a stale sender for a lingering hook.
+#[cfg(any(windows, target_os = "macos"))]
+pub(crate) struct GuardedSenderStream {
+    inner: ReceiverStream<InputEvent>,
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+impl GuardedSenderStream {
+    pub(crate) fn new(rx: ReceiverStream<InputEvent>) -> Self {
+        GuardedSenderStream { inner: rx }
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+impl Stream for GuardedSenderStream {
+    type Item = InputEvent;
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<InputEvent>> {
+        // SAFETY: no structural pinning of `inner` required.
+        let inner = unsafe { self.map_unchecked_mut(|s| &mut s.inner) };
+        inner.poll_next(cx)
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+impl Drop for GuardedSenderStream {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = SENDER.lock() {
+            *guard = None;
+        }
+    }
+}
 
 /// A platform input source.
 pub trait InputBackend: Send {
@@ -24,6 +108,9 @@ pub trait InputBackend: Send {
     /// Human-readable backend name (for `check` / diagnostics).
     fn name(&self) -> &'static str;
 }
+
+/// Stream type returned by every backend.
+pub type BoxStream<'a, T> = futures::stream::BoxStream<'a, T>;
 
 /// Error starting a backend (permissions, device access, etc.).
 #[derive(Debug, thiserror::Error)]

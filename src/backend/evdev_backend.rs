@@ -203,6 +203,8 @@ fn translate_key(code: KeyCode) -> InputEvent {
             let c = other.code();
             // evdev BTN_* codes live in 0x110..=0x117 (and nearby); treat any
             // remaining button as Mouse::Other, otherwise a keyboard key.
+            // ponytail: every 0x110..=0x117 code is a named BTN_ handled above, so
+            // this branch only fires for a future/un-named kernel button in range.
             if (0x110..=0x117).contains(&c) {
                 InputEvent::Mouse(MouseButton::Other(c))
             } else {
@@ -234,4 +236,51 @@ fn is_mouse(dev: &Device) -> bool {
         .map(|keys| keys.contains(KeyCode::BTN_LEFT))
         .unwrap_or(false);
     has_rel_x && has_left
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn translate_key_maps_buttons() {
+        assert_eq!(
+            translate_key(KeyCode::BTN_LEFT),
+            InputEvent::Mouse(MouseButton::Left)
+        );
+        assert_eq!(
+            translate_key(KeyCode::BTN_RIGHT),
+            InputEvent::Mouse(MouseButton::Right)
+        );
+        assert_eq!(
+            translate_key(KeyCode::BTN_MIDDLE),
+            InputEvent::Mouse(MouseButton::Middle)
+        );
+        // SIDE/BACK and EXTRA/FORWARD collapse to Back/Forward.
+        assert_eq!(
+            translate_key(KeyCode::BTN_SIDE),
+            InputEvent::Mouse(MouseButton::Back)
+        );
+        assert_eq!(
+            translate_key(KeyCode::BTN_BACK),
+            InputEvent::Mouse(MouseButton::Back)
+        );
+        assert_eq!(
+            translate_key(KeyCode::BTN_EXTRA),
+            InputEvent::Mouse(MouseButton::Forward)
+        );
+        assert_eq!(
+            translate_key(KeyCode::BTN_FORWARD),
+            InputEvent::Mouse(MouseButton::Forward)
+        );
+    }
+
+    #[test]
+    fn translate_key_maps_keyboard() {
+        // A normal keyboard keycode maps to Key(code).
+        assert_eq!(
+            translate_key(KeyCode::KEY_A),
+            InputEvent::Key(KeyCode::KEY_A.code())
+        );
+    }
 }
