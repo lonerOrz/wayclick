@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -58,9 +58,9 @@ jobs:
       - name: Prepare bundle (Windows)
         if: runner.os == 'Windows'
         run: |
-          mkdir bundle\examples
-          copy dist\wayclick.exe bundle\
-          xcopy template\wayclick bundle\examples\wayclick /E /I
+          New-Item -ItemType Directory -Force -Path bundle\examples
+          Copy-Item -Path dist\wayclick.exe -Destination bundle\
+          Copy-Item -Recurse -Path template\wayclick -Destination bundle\examples\
 
       # ---------- Upload ----------
       - name: Upload bundle
