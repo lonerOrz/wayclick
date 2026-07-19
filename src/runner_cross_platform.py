@@ -34,8 +34,8 @@ else:
 ENABLE_TRACKPADS = os.environ.get("ENABLE_TRACKPADS", "false").lower() == "true"
 
 # === PERFORMANCE FLAGS ===
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
-os.environ['SDL_BUFFER_CHUNK_SIZE'] = '256'
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+os.environ["SDL_BUFFER_CHUNK_SIZE"] = "256"
 
 # === AUDIO INIT ===
 try:
@@ -80,10 +80,11 @@ SOUND_CACHE = [None] * MAX_KEYCODE
 DEFAULT_SOUND_OBJS = [SOUNDS[f] for f in DEFAULTS if f in SOUNDS]
 
 for code, filename in RAW_KEY_MAP.items():
-    if code < MAX_KEYCODE and filename in SOUNDS:
+    if 0 <= code < MAX_KEYCODE and filename in SOUNDS:
         SOUND_CACHE[code] = SOUNDS[filename]
 
 _random_choice = random.choice
+
 
 def play_sound(code):
     if code < MAX_KEYCODE:
@@ -94,82 +95,21 @@ def play_sound(code):
     if DEFAULT_SOUND_OBJS:
         _random_choice(DEFAULT_SOUND_OBJS).play()
 
+
 def main():
     # Determine the current platform
     current_platform = platform.system().lower()
 
-    if current_platform == "linux":
-        # Import and run the Linux-specific input handler directly
-        import asyncio
-        import signal
-        import evdev
-        from evdev import ecodes
+    import input_handler
 
-        async def read_device(path, stop_event):
-            dev = None
-            try:
-                dev = evdev.InputDevice(path)
-                print(f"{C_GREEN}[+]{C_RESET} {dev.name}")
-                async for event in dev.async_read_loop():
-                    if stop_event.is_set():
-                        break
-                    if event.type == 1 and event.value == 1:  # EV_KEY and key press
-                        play_sound(event.code)
-            except Exception:
-                print(f"{C_YELLOW}[-]{C_RESET} {path}")
-            finally:
-                if dev:
-                    dev.close()
-
-        async def linux_main():
-            stop = asyncio.Event()
-            loop = asyncio.get_running_loop()
-
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, stop.set)
-
-            tasks = {}
-
-            while not stop.is_set():
-                for path in evdev.list_devices():
-                    if path in tasks:
-                        continue
-                    try:
-                        dev = evdev.InputDevice(path)
-                        name = dev.name.lower()
-                        if not ENABLE_TRACKPADS and ("touchpad" in name or "trackpad" in name):
-                            dev.close()
-                            continue
-                        if ecodes.EV_KEY in dev.capabilities():
-                            tasks[path] = asyncio.create_task(read_device(path, stop))
-                        dev.close()
-                    except Exception:
-                        pass
-
-                for p in [p for p, t in tasks.items() if t.done()]:
-                    del tasks[p]
-
-                try:
-                    await asyncio.wait_for(stop.wait(), timeout=3)
-                except asyncio.TimeoutError:
-                    pass
-
-            for t in tasks.values():
-                t.cancel()
-            await asyncio.gather(*tasks.values(), return_exceptions=True)
-
-        # Run the Linux-specific event loop
-        result = asyncio.run(linux_main())
-    else:
-        # For non-Linux platforms, use the input handler
-        import input_handler
-        handler = input_handler.InputHandler(play_sound)
-        result = handler.start_listening()
+    handler = input_handler.InputHandler(play_sound, enable_trackpads=ENABLE_TRACKPADS)
+    result = handler.start_listening()
 
     # Properly quit pygame when done
     pygame.mixer.quit()
 
     return result
+
 
 if __name__ == "__main__":
     main()

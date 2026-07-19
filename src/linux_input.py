@@ -2,11 +2,13 @@
 import asyncio
 import signal
 
+
 class LinuxInputListener:
-    def __init__(self, play_sound_callback, evdev, ecodes):
+    def __init__(self, play_sound_callback, evdev, ecodes, enable_trackpads=False):
         self.play_sound = play_sound_callback
         self.evdev = evdev
         self.ecodes = ecodes
+        self.enable_trackpads = enable_trackpads
 
     async def read_device(self, path, stop_event):
         dev = None
@@ -24,6 +26,10 @@ class LinuxInputListener:
             if dev:
                 dev.close()
 
+    def should_skip(self, name):
+        name = name.lower()
+        return not self.enable_trackpads and ("touchpad" in name or "trackpad" in name)
+
     async def run(self):
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()
@@ -40,7 +46,7 @@ class LinuxInputListener:
                 try:
                     dev = self.evdev.InputDevice(path)
                     name = dev.name.lower()
-                    if "touchpad" in name or "trackpad" in name:
+                    if self.should_skip(name):
                         dev.close()
                         continue
                     if self.ecodes.EV_KEY in dev.capabilities():
