@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 from platform_paths import config_dir as resolve_config_dir
+from process_manager import ProcessManager
 
 CONFIG_ENABLE_TRACKPADS = "false"
 RUNNER = os.path.join(
@@ -21,21 +22,10 @@ def notify(title, body):
     )
 
 
-def is_running():
-    try:
-        out = subprocess.run(
-            ["pgrep", "-f", "python.*runner_cross_platform"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        return out.returncode == 0
-    except FileNotFoundError:
-        return False
-
-
 def main():
     system = platform.system().lower()
     config_dir = resolve_config_dir(system)
+    pm = ProcessManager()
 
     # Root check (only meaningful on Linux)
     if system == "linux" and os.geteuid() == 0:
@@ -43,8 +33,8 @@ def main():
         return 1
 
     # Toggle off if already running
-    if is_running():
-        subprocess.run(["pkill", "-f", "python.*runner_cross_platform"])
+    if pm.is_running():
+        pm.toggle_off()
         notify("WayClick", "Disabled")
         return 0
 

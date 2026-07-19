@@ -26,9 +26,7 @@ class TestLauncher(unittest.TestCase):
             calls.append(cmd)
             envs[cmd[0]] = kw.get("env")
             rc = mock.MagicMock()
-            if cmd[0] == "pgrep":
-                rc.returncode = 0 if running else 1
-            elif cmd[0] == "notify-send":
+            if cmd[0] == "notify-send":
                 rc.returncode = notify_rc
             elif cmd[0] in ("python3", sys.executable, "python"):
                 rc.returncode = spawn_rc
@@ -42,6 +40,8 @@ class TestLauncher(unittest.TestCase):
             wc.subprocess, "run", side_effect=fake_run
         ), mock.patch.object(wc.os, "geteuid", return_value=euid), mock.patch(
             "os.path.isfile", return_value=config_exists
+        ), mock.patch.object(
+            wc.ProcessManager, "is_running", return_value=running
         ):
             rc = wc.main()
         return rc, calls, envs
@@ -111,6 +111,53 @@ class TestPlatformPaths(unittest.TestCase):
         self.assertEqual(
             config_dir("freebsd"), os.path.expanduser("~/.config/wayclick")
         )
+
+
+class TestProcessManager(unittest.TestCase):
+    def _run(self, fn, pgrep_rc=1, pkill_rc=0):
+        import process_manager
+
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            rc = mock.MagicMock()
+            rc.returncode = pkill_rc if cmd[0] == "pkill" else pgrep_rc
+            rc.stdout = mock.MagicMock()
+            return rc
+
+        with mock.patch.object(process_manager.subprocess, "run", side_effect=fake_run):
+            result = fn(process_manager.ProcessManager())
+        return result, calls
+
+    def test_is_running_true_when_pgrep_match(self):
+        result, calls = self._run(lambda pm: pm.is_running(), pgrep_rc=0)
+        self.assertTrue(result)
+        self.assertEqual(calls[0][:2], ["pgrep", "-f"])
+
+    def test_is_running_false_when_no_match(self):
+        result, _ = self._run(lambda pm: pm.is_running(), pgrep_rc=1)
+        self.assertFalse(result)
+
+    def test_is_running_false_when_pgrep_missing(self):
+        import process_manager
+
+        with mock.patch.object(
+            process_manager.subprocess,
+            "run",
+            side_effect=FileNotFoundError,
+        ):
+            self.assertFalse(process_manager.ProcessManager().is_running())
+
+    def test_toggle_off_sends_pkill(self):
+        _, calls = self._run(lambda pm: pm.toggle_off())
+        self.assertEqual(calls[0][:2], ["pkill", "-f"])
+
+    def test_toggle_uses_injected_pattern(self):
+        import process_manager
+
+        pm = process_manager.ProcessManager(runner_pattern="custom.*pattern")
+        self.assertEqual(pm.runner_pattern, "custom.*pattern")
 
 
 if __name__ == "__main__":
