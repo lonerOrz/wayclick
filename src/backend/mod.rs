@@ -45,10 +45,10 @@ pub(crate) static SENDER: Mutex<Option<Sender<InputEvent>>> = Mutex::new(None);
 /// blocking the hook/tap thread.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) fn emit(event: InputEvent) {
-    if let Ok(guard) = SENDER.lock() {
-        if let Some(tx) = guard.as_ref() {
-            let _ = tx.try_send(event);
-        }
+    if let Ok(guard) = SENDER.lock()
+        && let Some(tx) = guard.as_ref()
+    {
+        let _ = tx.try_send(event);
     }
 }
 
