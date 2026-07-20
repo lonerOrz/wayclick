@@ -50,7 +50,8 @@ impl App {
         tracing::info!(
             dir = %self.config_dir.display(),
             rules = config.rules.len(),
-            "loaded config"
+            sounds = config.sounds.len(),
+            "config loaded"
         );
 
         let engine = match RodioEngine::from_dir(
@@ -116,7 +117,7 @@ impl App {
         let defaults = config.default_ids.len();
         tracing::info!(
             dir = %self.config_dir.display(),
-            sounds.total = total,
+            sounds = total,
             sounds.loaded = loaded,
             rules = rules,
             defaults = defaults,
