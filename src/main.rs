@@ -45,6 +45,16 @@ enum Command {
 }
 
 fn resolve_config_dir() -> PathBuf {
+    let user = user_config_dir();
+    // Fall back to the bundled defaults when the user has no config.json yet.
+    if user.join("config.json").is_file() {
+        user
+    } else {
+        default_config_dir().unwrap_or(user)
+    }
+}
+
+fn user_config_dir() -> PathBuf {
     // Mirror the Python `platform_paths.config_dir`: mirrors the launcher's
     // platform-specific resolution. Keep in sync with src/platform_paths.py.
     let home = std::env::var_os("HOME").map(PathBuf::from);
@@ -64,6 +74,23 @@ fn resolve_config_dir() -> PathBuf {
         }
     }
     PathBuf::from("config")
+}
+
+/// Locate the bundled default config dir (config.json + wavs). Checks the dev
+/// `assets/default` next to the CWD, then the nix-installed `share/wayclick/config`
+/// relative to the executable. Returns the first that has a `config.json`.
+fn default_config_dir() -> Option<PathBuf> {
+    let mut candidates = vec![PathBuf::from("assets/default")];
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(PathBuf::from))
+    {
+        candidates.push(dir.join("../share/wayclick/config"));
+        candidates.push(dir.join("assets/default"));
+    }
+    candidates
+        .into_iter()
+        .find(|c| c.join("config.json").is_file())
 }
 
 fn main() {
