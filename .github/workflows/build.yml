@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      upload-artifacts:
+        description: "Upload release binaries as workflow artifacts"
+        type: boolean
+        default: false
 
 jobs:
   cargo:
@@ -29,6 +35,15 @@ jobs:
       - run: cargo build
       - run: cargo build --release
 
+      - name: Upload artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wayclick-${{ matrix.os }}
+          path: |
+            target/release/wayclick
+            target/release/wayclick.exe
+
   nix:
     name: nix build
     runs-on: ubuntu-latest
@@ -40,3 +55,12 @@ jobs:
             access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
       - run: nix -L build .#packages.x86_64-linux.default
       - run: nix -L flake check
+
+      - name: Upload artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
+        run: cp -L result/bin/wayclick wayclick-linux
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
+        with:
+          name: wayclick-nix-linux
+          path: wayclick-linux
