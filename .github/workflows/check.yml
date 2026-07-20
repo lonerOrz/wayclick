@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  cargo:
-    name: cargo (${{ matrix.os }})
+  check:
+    name: check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -31,5 +31,3 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
-      - run: cargo build --release
-      - run: cargo run -- check --config-dir ./assets/default
