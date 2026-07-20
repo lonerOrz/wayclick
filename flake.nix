@@ -55,7 +55,7 @@
 
             postInstall = ''
               mkdir -p $out/share/wayclick
-              cp -r ${./template/wayclick} $out/share/wayclick/config 2>/dev/null || true
+              cp -r ${./assets/default} $out/share/wayclick/config
             '';
 
             meta = {
@@ -101,8 +101,8 @@
             set -euo pipefail
             cargo fmt --all
             ${pkgs.nixpkgs-fmt}/bin/nixpkgs-fmt flake.nix
-            ${pkgs.prettier}/bin/prettier --write \
-              "template/**/*.json" ".github/**/*.yml"
+              ${pkgs.prettier}/bin/prettier --write \
+                "assets/**/*.json" ".github/**/*.yml"
           '';
         };
     in

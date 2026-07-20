@@ -32,7 +32,7 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - run: cargo build --release
-      - run: cargo run -- check --config-dir ./template/wayclick
+      - run: cargo run -- check --config-dir ./assets/default
 
   nix:
     name: nix build
