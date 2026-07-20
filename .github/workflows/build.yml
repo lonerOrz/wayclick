@@ -6,50 +6,93 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      build-ubuntu:
+        description: "Build for Linux (ubuntu-latest)"
+        type: boolean
+        default: true
+      build-windows:
+        description: "Build for Windows (windows-latest)"
+        type: boolean
+        default: true
+      build-macos:
+        description: "Build for macOS (macos-latest)"
+        type: boolean
+        default: true
       upload-artifacts:
         description: "Upload release binaries as workflow artifacts"
         type: boolean
         default: false
 
 jobs:
-  cargo:
-    name: build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+  cargo-ubuntu:
+    name: build (ubuntu-latest)
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_dispatch' || inputs.build-ubuntu
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Linux system deps
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libudev-dev libevdev-dev pkg-config
-
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: Swatinem/rust-cache@v2
-
-      - run: cargo build
       - run: cargo build --release
+      - name: Bundle default assets next to the binary
+        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
+        run: |
+          mkdir -p target/release/assets
+          cp -r assets/default target/release/assets/default
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
+        with:
+          name: wayclick-ubuntu-latest
+          path: |
+            target/release/wayclick
+            target/release/assets/default
 
+  cargo-windows:
+    name: build (windows-latest)
+    runs-on: windows-latest
+    if: github.event_name != 'workflow_dispatch' || inputs.build-windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
       - name: Bundle default assets next to the binary
         if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
         shell: bash
         run: |
           mkdir -p target/release/assets
           cp -r assets/default target/release/assets/default
-
-      - name: Upload artifact
+      - uses: actions/upload-artifact@v4
         if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
-        uses: actions/upload-artifact@v4
         with:
-          name: wayclick-${{ matrix.os }}
+          name: wayclick-windows-latest
+          path: |
+            target/release/wayclick.exe
+            target/release/assets/default
+
+  cargo-macos:
+    name: build (macos-latest)
+    runs-on: macos-latest
+    if: github.event_name != 'workflow_dispatch' || inputs.build-macos
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: Bundle default assets next to the binary
+        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
+        run: |
+          mkdir -p target/release/assets
+          cp -r assets/default target/release/assets/default
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
+        with:
+          name: wayclick-macos-latest
           path: |
             target/release/wayclick
-            target/release/wayclick.exe
             target/release/assets/default
 
   nix:
