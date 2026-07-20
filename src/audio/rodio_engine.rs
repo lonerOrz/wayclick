@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use rodio::Decoder;
 use rodio::source::Source;
-use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
+use rodio::stream::MixerDeviceSink;
 use rodio::{ChannelCount, SampleRate};
 
 use crate::audio::AudioEngine;
@@ -110,12 +110,13 @@ impl RodioEngine {
             return Err(AudioError::NoSounds);
         }
 
-        let sink = match buffer_frames {
-            Some(frames) => rodio::stream::DeviceSinkBuilder::from_default_device()?
-                .with_buffer_size(rodio::cpal::BufferSize::Fixed(frames))
-                .open_stream()?,
-            None => DeviceSinkBuilder::open_default_sink()?,
-        };
+        // A small fixed buffer keeps click→sound latency low (the device default
+        // is often ~100-200ms, which feels laggy). 512 frames ≈ 10ms @48k and is
+        // accepted by every cpal backend we ship on.
+        let frames = buffer_frames.unwrap_or(512);
+        let sink = rodio::stream::DeviceSinkBuilder::from_default_device()?
+            .with_buffer_size(rodio::cpal::BufferSize::Fixed(frames))
+            .open_stream()?;
 
         Ok(RodioEngine { sink, decoded })
     }

@@ -76,7 +76,11 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
     if code >= 0 && (wparam as u32 == WM_KEYDOWN || wparam as u32 == WM_SYSKEYDOWN) {
         // SAFETY: lparam points to a KBDLLHOOKSTRUCT for WH_KEYBOARD_LL.
         let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
-        emit(InputEvent::Key(kb.vkCode as u16));
+        // flags bit 14 (KF_REPEAT, 0x4000) marks OS auto-repeat while a key is
+        // held. Emit only the initial press so a held key plays once.
+        if (kb.flags & 0x4000) == 0 {
+            emit(InputEvent::Key(kb.vkCode as u16));
+        }
     }
     // SAFETY: passing the original hook arguments through unchanged.
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
