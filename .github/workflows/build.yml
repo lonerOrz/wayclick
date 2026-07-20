@@ -35,6 +35,13 @@ jobs:
       - run: cargo build
       - run: cargo build --release
 
+      - name: Bundle default assets next to the binary
+        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
+        shell: bash
+        run: |
+          mkdir -p target/release/assets
+          cp -r assets/default target/release/assets/default
+
       - name: Upload artifact
         if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
         uses: actions/upload-artifact@v4
@@ -43,6 +50,7 @@ jobs:
           path: |
             target/release/wayclick
             target/release/wayclick.exe
+            target/release/assets/default
 
   nix:
     name: nix build
