@@ -8,17 +8,17 @@
 use crate::domain::InputEvent;
 
 // Imports for the Windows/macOS hook/tap bridge (gated: evdev uses its own path).
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use futures::stream::Stream;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::pin::Pin;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::sync::Mutex;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::task::{Context, Poll};
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use tokio::sync::mpsc::Sender;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use tokio_stream::wrappers::ReceiverStream;
 
 #[cfg(target_os = "linux")]
@@ -29,7 +29,7 @@ pub mod macos_backend;
 pub mod windows_backend;
 
 /// Bounded channel capacity for the backend→pipeline bridge.
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) const CHANNEL_CAP: usize = 1024;
 
 /// The single sink hook/tap callbacks push into. Callbacks are free `extern`
@@ -38,12 +38,12 @@ pub(crate) const CHANNEL_CAP: usize = 1024;
 /// clears it via `GuardedSenderStream`'s `Drop`.
 ///
 /// Only Windows/macOS backends use this — evdev bridges via its own task.
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) static SENDER: Mutex<Option<Sender<InputEvent>>> = Mutex::new(None);
 
 /// Forward an event into the live sender, dropping on backpressure rather than
 /// blocking the hook/tap thread.
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) fn emit(event: InputEvent) {
     if let Ok(guard) = SENDER.lock() {
         if let Some(tx) = guard.as_ref() {
@@ -55,7 +55,7 @@ pub(crate) fn emit(event: InputEvent) {
 /// Install a fresh sender, rejecting if one is already live. A second `events()`
 /// call while the previous hook/tap thread is alive would overwrite `SENDER` and
 /// the old thread would keep pushing into the new channel (double-play).
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) fn try_start_sender(tx: Sender<InputEvent>) -> Result<(), BackendError> {
     let mut guard = SENDER
         .lock()
@@ -69,19 +69,19 @@ pub(crate) fn try_start_sender(tx: Sender<InputEvent>) -> Result<(), BackendErro
 
 /// Stream wrapper that clears the global `SENDER` when dropped, so a dropped
 /// stream (or a failed start) can't leave a stale sender for a lingering hook.
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) struct GuardedSenderStream {
     inner: ReceiverStream<InputEvent>,
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 impl GuardedSenderStream {
     pub(crate) fn new(rx: ReceiverStream<InputEvent>) -> Self {
         GuardedSenderStream { inner: rx }
     }
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 impl Stream for GuardedSenderStream {
     type Item = InputEvent;
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<InputEvent>> {
@@ -91,7 +91,7 @@ impl Stream for GuardedSenderStream {
     }
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 impl Drop for GuardedSenderStream {
     fn drop(&mut self) {
         if let Ok(mut guard) = SENDER.lock() {
@@ -118,8 +118,14 @@ pub type BoxStream<'a, T> = futures::stream::BoxStream<'a, T>;
 /// Error starting a backend (permissions, device access, etc.).
 #[derive(Debug, thiserror::Error)]
 pub enum BackendError {
+    // Windows low-level hooks fail at "install hook / spawn pump thread", so they
+    // only use `Start`. Linux evdev and macOS CGEventTap additionally have an
+    // accessibility/device-access gate, so they also use `Permission`. Gate each
+    // variant to the platforms that actually construct it — no `allow(dead_code)`.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[error("backend failed to start: {0}")]
     Start(String),
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[error("accessibility/input permission denied")]
     Permission,
 }

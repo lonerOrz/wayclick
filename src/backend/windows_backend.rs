@@ -37,21 +37,19 @@ impl InputBackend for WindowsBackend {
         "windows-low-level-hook"
     }
 
-    #[cfg(windows)]
+    #[cfg(target_os = "windows")]
     fn events(&mut self) -> Result<BoxStream<'static, InputEvent>, BackendError> {
         windows_impl::start()
     }
 
-    #[cfg(not(windows))]
+    #[cfg(not(target_os = "windows"))]
     fn events(&mut self) -> Result<BoxStream<'static, InputEvent>, BackendError> {
         let _ = &self.enable_trackpads;
-        Err(BackendError::Start(
-            "windows backend is only available on Windows".into(),
-        ))
+        Err(BackendError::Permission)
     }
 }
 
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 mod windows_impl {
     use futures::StreamExt;
     use futures::stream::BoxStream;
@@ -69,13 +67,11 @@ mod windows_impl {
     use crate::domain::{InputEvent, MouseButton};
 
     unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if code >= 0 {
-            let msg = wparam as u32;
-            if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
-                // SAFETY: lparam points to a KBDLLHOOKSTRUCT for WH_KEYBOARD_LL.
-                let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
-                emit(InputEvent::Key(kb.vkCode as u16));
-            }
+        // Collapsed guard avoids clippy::collapsible_if.
+        if code >= 0 && (wparam as u32 == WM_KEYDOWN || wparam as u32 == WM_SYSKEYDOWN) {
+            // SAFETY: lparam points to a KBDLLHOOKSTRUCT for WH_KEYBOARD_LL.
+            let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
+            emit(InputEvent::Key(kb.vkCode as u16));
         }
         // SAFETY: passing the original hook arguments through unchanged.
         unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }

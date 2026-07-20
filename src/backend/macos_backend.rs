@@ -3,7 +3,7 @@
 //! - CGEvent::tap_create(SessionEventTap, HeadInsertEventTap, ListenOnly, mask, cb, null)
 //! - CGEventType::KeyDown -> InputEvent::Key(keycode) ONLY (no KeyUp double-play)
 //! - LeftMouseDown/RightMouseDown/OtherMouseDown -> InputEvent::Mouse(..)
-//! - no CGEventTapCreateRunLoopSource: use CFMachPortCreateRunLoopSource + CFRunLoopRun
+//! - no CGEventTapCreateRunLoopSource: use CFMachPort::new_run_loop_source + CFRunLoopRun
 //! - None from tap_create = permission denied -> BackendError::Permission
 
 #[cfg(not(target_os = "macos"))]
@@ -32,7 +32,6 @@ impl MacosBackend {
 #[cfg(target_os = "macos")]
 mod imp {
     use std::ffi::c_void;
-    use std::sync::Mutex;
     use std::sync::mpsc as std_mpsc;
     use std::time::Duration;
 
@@ -41,15 +40,15 @@ mod imp {
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
 
-    use objc2_core_foundation::{CFMachPortCreateRunLoopSource, CFRunLoop, kCFRunLoopDefaultMode};
+    use objc2_core_foundation::{CFMachPort, CFRunLoop, kCFRunLoopDefaultMode};
     use objc2_core_graphics::{
         CGEvent, CGEventField, CGEventMask, CGEventTapLocation, CGEventTapOptions,
         CGEventTapPlacement, CGEventTapProxy, CGEventType,
     };
 
+    use super::MacosBackend;
     use crate::backend::{
-        BackendError, CHANNEL_CAP, GuardedSenderStream, InputBackend, MacosBackend, emit,
-        try_start_sender,
+        BackendError, CHANNEL_CAP, GuardedSenderStream, InputBackend, emit, try_start_sender,
     };
     use crate::domain::{InputEvent, MouseButton};
 
@@ -81,18 +80,19 @@ mod imp {
     }
 
     /// CGEventTap callback (ListenOnly): forward the event and return it unchanged.
-    extern "C" fn tap_callback(
+    unsafe extern "C-unwind" fn tap_callback(
         _proxy: CGEventTapProxy,
         event_type: CGEventType,
-        event: *const CGEvent,
+        event: std::ptr::NonNull<CGEvent>,
         _user_info: *mut c_void,
-    ) -> *const CGEvent {
+    ) -> *mut CGEvent {
+        let event_ptr = event.as_ptr();
         unsafe {
-            if let Some(input) = map_event(event_type, event) {
+            if let Some(input) = map_event(event_type, event_ptr) {
                 emit(input);
             }
         }
-        event
+        event_ptr
     }
 
     fn event_mask() -> CGEventMask {
@@ -123,7 +123,7 @@ mod imp {
                 }
             };
 
-            let source = CFMachPortCreateRunLoopSource(None, Some(&mach_port), 0);
+            let source = CFMachPort::new_run_loop_source(None, Some(&mach_port), 0);
             let run_loop = CFRunLoop::current();
             if let (Some(rl), Some(src)) = (run_loop.as_deref(), source.as_deref()) {
                 rl.add_source(Some(src), kCFRunLoopDefaultMode);
@@ -170,7 +170,7 @@ mod imp {
 #[cfg(not(target_os = "macos"))]
 impl InputBackend for MacosBackend {
     fn events(&mut self) -> Result<BoxStream<'static, crate::domain::InputEvent>, BackendError> {
-        Err(BackendError::Start("macos-only".into()))
+        Err(BackendError::Permission)
     }
 
     fn name(&self) -> &'static str {
