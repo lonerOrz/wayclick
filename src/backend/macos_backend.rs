@@ -75,6 +75,12 @@ unsafe fn map_event(event_type: CGEventType, event: *const CGEvent) -> Option<In
     // `CGEventType` is a `#[repr(transparent)]` struct of associated consts,
     // not an enum, so match on the raw `u32` rather than the const patterns.
     if event_type == CGEventType::KeyDown {
+        // field 8 is nonzero for OS auto-repeat while a key is held; emit only
+        // the initial press so a held key plays once.
+        let repeat = CGEvent::integer_value_field(Some(ev), CGEventField::KeyboardEventAutorepeat);
+        if repeat != 0 {
+            return None;
+        }
         let code = CGEvent::integer_value_field(Some(ev), CGEventField::KeyboardEventKeycode);
         Some(InputEvent::Key(code as u16))
     } else if event_type == CGEventType::LeftMouseDown {

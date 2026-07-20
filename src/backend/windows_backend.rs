@@ -50,6 +50,11 @@ impl InputBackend for WindowsBackend {
 }
 
 #[cfg(target_os = "windows")]
+use std::collections::HashSet;
+#[cfg(target_os = "windows")]
+use std::sync::Mutex;
+
+#[cfg(target_os = "windows")]
 use futures::StreamExt;
 #[cfg(target_os = "windows")]
 use tokio::sync::mpsc;
@@ -61,8 +66,8 @@ use windows_sys::Win32::Foundation::{GetLastError, HINSTANCE, LPARAM, LRESULT, W
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, SetWindowsHookExW,
-    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_RBUTTONDOWN,
-    WM_SYSKEYDOWN, WM_XBUTTONDOWN,
+    WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
+    WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN,
 };
 
 #[cfg(target_os = "windows")]
@@ -70,16 +75,34 @@ use crate::backend::{CHANNEL_CAP, GuardedSenderStream, emit, try_start_sender};
 #[cfg(target_os = "windows")]
 use crate::domain::MouseButton;
 
+// WH_KEYBOARD_LL does not surface OS auto-repeat (the repeat count lives in the
+// higher-level key messages, not in KBDLLHOOKSTRUCT). Track held keys ourselves
+// so a held key emits exactly one press.
+#[cfg(target_os = "windows")]
+static PRESSED: std::sync::LazyLock<Mutex<HashSet<u16>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
+
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    // Collapsed guard avoids clippy::collapsible_if.
-    if code >= 0 && (wparam as u32 == WM_KEYDOWN || wparam as u32 == WM_SYSKEYDOWN) {
+    if code >= 0 {
+        let msg = wparam as u32;
         // SAFETY: lparam points to a KBDLLHOOKSTRUCT for WH_KEYBOARD_LL.
         let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
-        // flags bit 14 (KF_REPEAT, 0x4000) marks OS auto-repeat while a key is
-        // held. Emit only the initial press so a held key plays once.
-        if (kb.flags & 0x4000) == 0 {
-            emit(InputEvent::Key(kb.vkCode as u16));
+        let vk = kb.vkCode as u16;
+        match msg {
+            WM_KEYDOWN | WM_SYSKEYDOWN => {
+                if let Ok(mut set) = PRESSED.lock() {
+                    if set.insert(vk) {
+                        emit(InputEvent::Key(vk));
+                    }
+                }
+            }
+            WM_KEYUP | WM_SYSKEYUP => {
+                if let Ok(mut set) = PRESSED.lock() {
+                    set.remove(&vk);
+                }
+            }
+            _ => {}
         }
     }
     // SAFETY: passing the original hook arguments through unchanged.
