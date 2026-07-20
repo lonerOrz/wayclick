@@ -3,10 +3,14 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { self, nixpkgs }:
+    { self, nixpkgs, rust-overlay }:
     let
       systems = [
         "x86_64-linux"
@@ -18,7 +22,21 @@
       perSystem =
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ rust-overlay.overlays.default ];
+          };
+
+          # Rust toolchain that also knows the Windows GNU target, for
+          # cross-building an .exe from Linux.
+          rustWin =
+            pkgs.rust-bin.stable.latest.default.override
+              {
+                targets = [ "x86_64-pc-windows-gnu" ];
+              };
+
+          # mingw-w64 toolchain provides the linker + Windows import libs.
+          mingwPkgs = pkgs.pkgsCross.mingwW64;
 
           nativeLibs = [
             pkgs.pkg-config
@@ -63,9 +81,42 @@
               mainProgram = "wayclick";
             };
           };
+
+          # Cross-built Windows .exe (runs from Linux via `nix build .#winExe`).
+          winExe =
+            pkgs.lib.optionalAttrs pkgs.stdenv.isLinux
+              (mingwPkgs.rustPlatform.buildRustPackage {
+            pname = "wayclick-win";
+            version = "0.1.0";
+            src = pkgs.lib.cleanSource ./.;
+
+            cargoLock.lockFile = ./Cargo.lock;
+
+            # Use the toolchain that bundles the windows-gnu target.
+            cargo = rustWin;
+            rustc = rustWin;
+
+            CARGO_BUILD_TARGET = "x86_64-pc-windows-gnu";
+
+            # mingw linker + Windows import libs for the cpal/windows-sys deps.
+            nativeBuildInputs = [ mingwPkgs.buildPackages.gcc ];
+            buildInputs = [ ];
+
+            # bundle the default config so the .exe finds assets/default next to it.
+            postInstall = ''
+              mkdir -p $out/assets/default
+              cp -r ${./assets/default}/* $out/assets/default/
+            '';
+
+            meta = {
+              description = "Low-latency input sound engine (Windows .exe)";
+              mainProgram = "wayclick.exe";
+            };
+          });
         in
         {
           packages.default = wayclick;
+          packages.winExe = winExe;
           checks.unit-tests = pkgs.rustPlatform.buildRustPackage {
             pname = "wayclick-tests";
             version = "0.1.0";
