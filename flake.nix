@@ -101,8 +101,7 @@
             set -euo pipefail
             cargo fmt --all
             ${pkgs.nixpkgs-fmt}/bin/nixpkgs-fmt flake.nix
-              ${pkgs.prettier}/bin/prettier --write \
-                "assets/**/*.json" ".github/**/*.yml"
+            ${pkgs.prettier}/bin/prettier --write . --ignore-path .gitignore
           '';
         };
     in
