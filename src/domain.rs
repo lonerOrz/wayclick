@@ -41,6 +41,50 @@ pub enum MouseButton {
     Other(u16),
 }
 
+impl MouseButton {
+    /// Map a Linux evdev button code (the `BTN_*` numeric values) to a button.
+    ///
+    /// This is the canonical mouse-button vocabulary: evdev's `BTN_LEFT` (0x110)
+    /// etc. The JSON config reuses the same numbers (272/273/274 = 0x110/1/2),
+    /// so config and the evdev backend share this one ladder. Returns `None`
+    /// for a code that isn't a button (a keyboard key).
+    pub fn from_evdev_code(code: u16) -> Option<MouseButton> {
+        match code {
+            0x110 => Some(MouseButton::Left),
+            0x111 => Some(MouseButton::Right),
+            0x112 => Some(MouseButton::Middle),
+            0x113 | 0x116 => Some(MouseButton::Back), // BTN_SIDE / BTN_BACK
+            0x114 | 0x115 => Some(MouseButton::Forward), // BTN_EXTRA / BTN_FORWARD
+            0x117 => Some(MouseButton::Other(code)),  // BTN_TASK: in-range, un-named
+            _ => None,
+        }
+    }
+
+    /// Map a macOS `OtherMouseDown` button number (0..=4) to a button.
+    #[allow(dead_code)] // used only by the macOS backend (cfg-gated).
+    pub fn from_cg_button_number(n: i64) -> MouseButton {
+        match n {
+            0 => MouseButton::Left,
+            1 => MouseButton::Right,
+            2 => MouseButton::Middle,
+            3 => MouseButton::Back,
+            4 => MouseButton::Forward,
+            other => MouseButton::Other(other as u16),
+        }
+    }
+
+    /// Map a Windows `WM_XBUTTONDOWN` extra-button id (1 or 2) to a button.
+    /// 1 = XBUTTON1 (Back), any other value = XBUTTON2 (Forward).
+    #[allow(dead_code)] // used only by the Windows backend (cfg-gated).
+    pub fn from_windows_xbutton(x_id: u16) -> MouseButton {
+        if x_id == 1 {
+            MouseButton::Back
+        } else {
+            MouseButton::Forward
+        }
+    }
+}
+
 /// A normalized input event flowing through the pipeline.
 ///
 /// Backends translate their platform-specific events into this enum. `value`
@@ -78,5 +122,43 @@ pub struct CompiledRule {
 impl CompiledRule {
     pub fn new(trigger: InputEvent, actions: Vec<Action>) -> CompiledRule {
         CompiledRule { trigger, actions }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evdev_code_ladder() {
+        assert_eq!(MouseButton::from_evdev_code(0x110), Some(MouseButton::Left));
+        assert_eq!(
+            MouseButton::from_evdev_code(0x111),
+            Some(MouseButton::Right)
+        );
+        assert_eq!(
+            MouseButton::from_evdev_code(0x112),
+            Some(MouseButton::Middle)
+        );
+        assert_eq!(MouseButton::from_evdev_code(0x113), Some(MouseButton::Back)); // SIDE
+        assert_eq!(MouseButton::from_evdev_code(0x116), Some(MouseButton::Back)); // BACK
+        assert_eq!(
+            MouseButton::from_evdev_code(0x114),
+            Some(MouseButton::Forward)
+        ); // EXTRA
+        assert_eq!(
+            MouseButton::from_evdev_code(0x115),
+            Some(MouseButton::Forward)
+        ); // FORWARD
+        // A keyboard key is not a button.
+        assert_eq!(MouseButton::from_evdev_code(30), None); // KEY_A
+    }
+
+    #[test]
+    fn cg_and_windows_ladders() {
+        assert_eq!(MouseButton::from_cg_button_number(3), MouseButton::Back);
+        assert_eq!(MouseButton::from_cg_button_number(9), MouseButton::Other(9));
+        assert_eq!(MouseButton::from_windows_xbutton(1), MouseButton::Back);
+        assert_eq!(MouseButton::from_windows_xbutton(2), MouseButton::Forward);
     }
 }

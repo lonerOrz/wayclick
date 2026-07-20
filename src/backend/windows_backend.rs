@@ -87,13 +87,8 @@ mod windows_impl {
                 WM_MBUTTONDOWN => Some(MouseButton::Middle),
                 WM_XBUTTONDOWN => {
                     let ms = &*(lparam as *const MSLLHOOKSTRUCT);
-                    let x_id = (ms.mouseData >> 16) & 0xFFFF;
-                    // 1 = XBUTTON1 (Back), 2 = XBUTTON2 (Forward).
-                    Some(if x_id == 1 {
-                        MouseButton::Back
-                    } else {
-                        MouseButton::Forward
-                    })
+                    let x_id = ((ms.mouseData >> 16) & 0xFFFF) as u16;
+                    Some(MouseButton::from_windows_xbutton(x_id))
                 }
                 _ => None,
             };

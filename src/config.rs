@@ -158,12 +158,11 @@ pub fn compile(raw: RawConfig) -> Result<CompiledConfig, ConfigError> {
 /// - any other parseable `u16` -> `InputEvent::Key(code)`.
 /// - anything else -> `None` (skipped).
 fn parse_trigger(key: &str) -> Option<InputEvent> {
-    match key {
-        "272" => Some(InputEvent::Mouse(MouseButton::Left)),
-        "273" => Some(InputEvent::Mouse(MouseButton::Right)),
-        "274" => Some(InputEvent::Mouse(MouseButton::Middle)),
-        _ => key.parse::<u16>().ok().map(InputEvent::Key),
-    }
+    let code = key.parse::<u16>().ok()?;
+    Some(match MouseButton::from_evdev_code(code) {
+        Some(button) => InputEvent::Mouse(button),
+        None => InputEvent::Key(code),
+    })
 }
 
 #[cfg(test)]

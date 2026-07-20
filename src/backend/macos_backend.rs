@@ -72,15 +72,7 @@ mod imp {
             Some(InputEvent::Mouse(MouseButton::Right))
         } else if event_type == CGEventType::OtherMouseDown {
             let n = CGEvent::integer_value_field(Some(ev), CGEventField::MouseEventButtonNumber);
-            let button = match n {
-                0 => MouseButton::Left,
-                1 => MouseButton::Right,
-                2 => MouseButton::Middle,
-                3 => MouseButton::Back,
-                4 => MouseButton::Forward,
-                other => MouseButton::Other(other as u16),
-            };
-            Some(InputEvent::Mouse(button))
+            Some(InputEvent::Mouse(MouseButton::from_cg_button_number(n)))
         } else {
             None
         }

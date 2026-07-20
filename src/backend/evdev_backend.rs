@@ -193,24 +193,10 @@ fn spawn_device(
 /// Map an evdev `KeyCode` to our `InputEvent`. Mouse buttons become `Mouse`,
 /// everything else is a keyboard `Key(code)`.
 fn translate_key(code: KeyCode) -> InputEvent {
-    match code {
-        KeyCode::BTN_LEFT => InputEvent::Mouse(MouseButton::Left),
-        KeyCode::BTN_RIGHT => InputEvent::Mouse(MouseButton::Right),
-        KeyCode::BTN_MIDDLE => InputEvent::Mouse(MouseButton::Middle),
-        KeyCode::BTN_SIDE | KeyCode::BTN_BACK => InputEvent::Mouse(MouseButton::Back),
-        KeyCode::BTN_EXTRA | KeyCode::BTN_FORWARD => InputEvent::Mouse(MouseButton::Forward),
-        other => {
-            let c = other.code();
-            // evdev BTN_* codes live in 0x110..=0x117 (and nearby); treat any
-            // remaining button as Mouse::Other, otherwise a keyboard key.
-            // ponytail: every 0x110..=0x117 code is a named BTN_ handled above, so
-            // this branch only fires for a future/un-named kernel button in range.
-            if (0x110..=0x117).contains(&c) {
-                InputEvent::Mouse(MouseButton::Other(c))
-            } else {
-                InputEvent::Key(c)
-            }
-        }
+    let c = code.code();
+    match MouseButton::from_evdev_code(c) {
+        Some(button) => InputEvent::Mouse(button),
+        None => InputEvent::Key(c),
     }
 }
 
