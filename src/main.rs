@@ -10,12 +10,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-mod app;
-mod audio;
-mod backend;
-mod config;
-mod domain;
-mod pipeline;
+use wayclick::app;
 
 #[derive(Parser)]
 #[command(name = "wayclick", version, about = "Low-latency input sound engine")]
