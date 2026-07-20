@@ -53,6 +53,7 @@ impl InputBackend for WindowsBackend {
 
 #[cfg(windows)]
 mod windows_impl {
+    use futures::StreamExt;
     use futures::stream::BoxStream;
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
@@ -71,11 +72,13 @@ mod windows_impl {
         if code >= 0 {
             let msg = wparam as u32;
             if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
-                let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
+                // SAFETY: lparam points to a KBDLLHOOKSTRUCT for WH_KEYBOARD_LL.
+                let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
                 emit(InputEvent::Key(kb.vkCode as u16));
             }
         }
-        CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+        // SAFETY: passing the original hook arguments through unchanged.
+        unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
     }
 
     unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -86,7 +89,8 @@ mod windows_impl {
                 WM_RBUTTONDOWN => Some(MouseButton::Right),
                 WM_MBUTTONDOWN => Some(MouseButton::Middle),
                 WM_XBUTTONDOWN => {
-                    let ms = &*(lparam as *const MSLLHOOKSTRUCT);
+                    // SAFETY: lparam points to an MSLLHOOKSTRUCT for WH_MOUSE_LL.
+                    let ms = unsafe { &*(lparam as *const MSLLHOOKSTRUCT) };
                     let x_id = ((ms.mouseData >> 16) & 0xFFFF) as u16;
                     Some(MouseButton::from_windows_xbutton(x_id))
                 }
@@ -96,7 +100,8 @@ mod windows_impl {
                 emit(InputEvent::Mouse(b));
             }
         }
-        CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+        // SAFETY: passing the original hook arguments through unchanged.
+        unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
     }
 
     pub fn start() -> Result<BoxStream<'static, InputEvent>, BackendError> {

@@ -21,8 +21,11 @@ use tokio::sync::mpsc::Sender;
 #[cfg(any(windows, target_os = "macos"))]
 use tokio_stream::wrappers::ReceiverStream;
 
+#[cfg(target_os = "linux")]
 pub mod evdev_backend;
+#[cfg(target_os = "macos")]
 pub mod macos_backend;
+#[cfg(target_os = "windows")]
 pub mod windows_backend;
 
 /// Bounded channel capacity for the backend→pipeline bridge.

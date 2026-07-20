@@ -36,6 +36,7 @@ mod imp {
     use std::sync::mpsc as std_mpsc;
     use std::time::Duration;
 
+    use futures::StreamExt;
     use futures::stream::BoxStream;
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
@@ -60,7 +61,8 @@ mod imp {
 
     /// Map a CGEvent to our normalized `InputEvent`, or `None` if we don't care.
     unsafe fn map_event(event_type: CGEventType, event: *const CGEvent) -> Option<InputEvent> {
-        let ev = &*event;
+        // SAFETY: CGEventTap callback guarantees `event` is a valid CGEvent.
+        let ev = unsafe { &*event };
         // `CGEventType` is a `#[repr(transparent)]` struct of associated consts,
         // not an enum, so match on the raw `u32` rather than the const patterns.
         if event_type == CGEventType::KeyDown {
