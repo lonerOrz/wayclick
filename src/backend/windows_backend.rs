@@ -52,8 +52,6 @@ impl InputBackend for WindowsBackend {
 #[cfg(target_os = "windows")]
 use futures::StreamExt;
 #[cfg(target_os = "windows")]
-use futures::stream::BoxStream;
-#[cfg(target_os = "windows")]
 use tokio::sync::mpsc;
 #[cfg(target_os = "windows")]
 use tokio_stream::wrappers::ReceiverStream;
@@ -68,9 +66,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 #[cfg(target_os = "windows")]
-use crate::backend::{BackendError, CHANNEL_CAP, GuardedSenderStream, emit, try_start_sender};
+use crate::backend::{CHANNEL_CAP, GuardedSenderStream, emit, try_start_sender};
 #[cfg(target_os = "windows")]
-use crate::domain::{InputEvent, MouseButton};
+use crate::domain::MouseButton;
 
 #[cfg(target_os = "windows")]
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
