@@ -91,10 +91,10 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
         let vk = kb.vkCode as u16;
         match msg {
             WM_KEYDOWN | WM_SYSKEYDOWN => {
-                if let Ok(mut set) = PRESSED.lock() {
-                    if set.insert(vk) {
-                        emit(InputEvent::Key(vk));
-                    }
+                if let Ok(mut set) = PRESSED.lock()
+                    && set.insert(vk)
+                {
+                    emit(InputEvent::Key(vk));
                 }
             }
             WM_KEYUP | WM_SYSKEYUP => {
