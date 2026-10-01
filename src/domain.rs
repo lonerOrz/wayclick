@@ -1,27 +1,19 @@
-//! Domain types: the value-level vocabulary shared across the whole pipeline.
-//!
-//! Design rules (from the rewrite plan):
-//! - `SoundId` is a `NonZeroU16`, never a `usize` and never a raw filename `String`.
-//! - Inputs are modeled as a closed `InputEvent` enum, not strings.
-//! - `Action` has exactly one variant for v1 (`PlaySound`); more are a seam, not a trait.
+//! Domain types: the value vocabulary shared across the whole pipeline.
 
 use std::num::NonZeroU16;
 
-/// A resolved sound slot. `0` is reserved/unused so `NonZeroU16` is safe.
-///
-/// `SoundId(1)` is the first sound, `SoundId(2)` the second, etc. The audio
-/// cache is a `Vec<Option<Arc<[f32]>>>` indexed by `SoundId.get() - 1`.
+/// A resolved sound slot. `0` is reserved, hence `NonZeroU16`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SoundId(NonZeroU16);
 
 impl SoundId {
-    /// Construct from a 1-based index. Returns `None` for `0` (the "no sound" slot).
+    /// 1-based index; `None` for `0` (the "no sound" slot).
     #[inline]
     pub fn new(index: u16) -> Option<SoundId> {
         NonZeroU16::new(index).map(SoundId)
     }
 
-    /// The 1-based index. Use for cache lookups as `get() - 1`.
+    /// The 1-based index; cache lookups use `get() - 1`.
     #[inline]
     pub fn get(self) -> u16 {
         self.0.get()
@@ -42,12 +34,9 @@ pub enum MouseButton {
 }
 
 impl MouseButton {
-    /// Map a Linux evdev button code (the `BTN_*` numeric values) to a button.
-    ///
-    /// This is the canonical mouse-button vocabulary: evdev's `BTN_LEFT` (0x110)
-    /// etc. The JSON config reuses the same numbers (272/273/274 = 0x110/1/2),
-    /// so config and the evdev backend share this one ladder. Returns `None`
-    /// for a code that isn't a button (a keyboard key).
+    /// Map a Linux evdev `BTN_*` code to a button. The JSON config reuses the
+    /// same numbers, so config and the evdev backend share this one ladder.
+    /// `None` for a code that isn't a button.
     pub fn from_evdev_code(code: u16) -> Option<MouseButton> {
         match code {
             0x110 => Some(MouseButton::Left),
@@ -73,7 +62,6 @@ impl MouseButton {
     }
 
     /// Map a Windows `WM_XBUTTONDOWN` extra-button id (1 or 2) to a button.
-    /// 1 = XBUTTON1 (Back), any other value = XBUTTON2 (Forward).
     pub fn from_windows_xbutton(x_id: u16) -> MouseButton {
         if x_id == 1 {
             MouseButton::Back
@@ -83,27 +71,19 @@ impl MouseButton {
     }
 }
 
-/// A normalized input event flowing through the pipeline.
-///
-/// Backends translate their platform-specific events into this enum and drop
-/// anything they don't want (trackpads, auto-repeats) before it gets here, so
-/// every value in the stream is something the pipeline should consider. `value`
-/// semantics (press/release/repeat) are already collapsed: we only emit `Key`
-/// on the *press* edge, so there is no double-play (the macOS Python bug).
+/// A normalized input event. Backends translate native events into this and drop
+/// what they don't want (trackpads, auto-repeats), so every event the pipeline
+/// sees should be acted on. Only the press edge is emitted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InputEvent {
-    /// A keyboard key, identified by its platform keycode (evdev/Win VK/CG keycode).
+    /// A keyboard key, by platform keycode (evdev / Win VK / CG keycode).
     Key(u16),
     /// A mouse button press.
     Mouse(MouseButton),
 }
 
 impl InputEvent {
-    /// Map a numeric keycode to an `InputEvent`.
-    ///
-    /// Mouse buttons use the canonical evdev `BTN_*` numbers, which the JSON
-    /// config also uses; any other code is a keyboard `Key(code)`. This is the
-    /// one ladder shared by config parsing and the evdev backend.
+    /// Map a numeric keycode: evdev `BTN_*` numbers become `Mouse`, else `Key`.
     pub fn from_evdev_code(code: u16) -> InputEvent {
         match MouseButton::from_evdev_code(code) {
             Some(button) => InputEvent::Mouse(button),
@@ -112,19 +92,14 @@ impl InputEvent {
     }
 }
 
-/// An action the executor can perform. v1 has exactly one variant.
-///
-/// New variants (Notify, Http, Mqtt) are a *seam*: add them here when needed,
-/// do not introduce an `Action` trait — there is only one executor.
+/// An action the executor can perform. Add variants here, not an `Action` trait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     PlaySound(SoundId),
 }
 
-/// A single rule: when `trigger` fires, run `actions` (in order).
-///
-/// `trigger` is a `InputEvent`; the `CompiledRule` already resolved any
-/// filename in the JSON to a `SoundId`, so the hot path does no string lookups.
+/// When `trigger` fires, run `actions` in order. Filenames are already resolved
+/// to `SoundId`s, so the hot path does no string lookups.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledRule {
     pub trigger: InputEvent,
@@ -162,7 +137,6 @@ mod tests {
             MouseButton::from_evdev_code(0x115),
             Some(MouseButton::Forward)
         ); // FORWARD
-        // A keyboard key is not a button.
         assert_eq!(MouseButton::from_evdev_code(30), None); // KEY_A
     }
 

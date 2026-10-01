@@ -1,8 +1,5 @@
-//! macOS backend: global event tap via objc2 (CGEventTap, ListenOnly).
-//!
-//! `CGEvent::tap_create` with `SessionEventTap`/`ListenOnly`; the callback pushes
-//! normalized events through the shared [`bridge`]. `None` from `tap_create`
-//! means the Accessibility permission is missing.
+//! macOS backend: global CGEventTap (ListenOnly) via objc2. `tap_create`
+//! returning `None` means the Accessibility permission is missing.
 
 use std::ffi::c_void;
 use std::time::Duration;
@@ -18,10 +15,8 @@ use crate::backend::bridge::{self, Ready, emit};
 use crate::backend::{BackendError, InputBackend};
 use crate::domain::{InputEvent, MouseButton};
 
-/// macOS input backend using a CGEventTap.
-///
-/// The CGEventTap layer does not distinguish a trackpad from a mouse, so there
-/// is no trackpad policy here (see `backend::evdev_backend`).
+/// macOS input backend. The tap cannot tell a trackpad from a mouse, so there is
+/// no trackpad policy here (see `backend::evdev_backend`).
 pub struct MacosBackend;
 
 impl InputBackend for MacosBackend {
@@ -34,8 +29,7 @@ impl InputBackend for MacosBackend {
     }
 }
 
-/// `CGEventMaskBit` is a C macro objc2 does not generate: bit `n` of the mask is
-/// event type `n`.
+/// `CGEventMaskBit` is a C macro objc2 does not generate: bit `n` is event type `n`.
 fn mask_bit(ty: CGEventType) -> CGEventMask {
     1u64 << (ty.0 as u64)
 }

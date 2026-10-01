@@ -1,9 +1,7 @@
-//! Bridge for backends whose events arrive on a foreign (non-tokio) thread.
-//!
-//! Win32 low-level hooks and CGEventTap callbacks are `extern` functions that
-//! cannot capture state, so they push events into a process-global sender.
-//! `start_bridged` owns the whole lifecycle: channel, global sender, hook thread,
-//! start handshake, and teardown-on-drop.
+//! Bridge for backends whose events arrive on a foreign (non-tokio) thread:
+//! Win32 hooks and CGEventTap callbacks are `extern` fns that cannot be async,
+//! so they push into a process-global sender. `start_bridged` owns the whole
+//! lifecycle: channel, global sender, hook thread, handshake, teardown-on-drop.
 
 use std::pin::Pin;
 use std::sync::Mutex;
@@ -18,11 +16,10 @@ use tokio_stream::wrappers::ReceiverStream;
 use super::BackendError;
 use crate::domain::InputEvent;
 
-/// Bounded channel capacity for the callback -> pipeline bridge.
+/// Bounded capacity of the callback -> pipeline channel.
 const CHANNEL_CAP: usize = 1024;
 
-/// The single sink hook/tap callbacks push into. `Option` (not `OnceLock`) so a
-/// fresh `events()` replaces it; [`GuardedSenderStream`] clears it on drop.
+/// The sink hook/tap callbacks push into; `GuardedSenderStream` clears it on drop.
 static SENDER: Mutex<Option<Sender<InputEvent>>> = Mutex::new(None);
 
 /// Forward an event from a hook callback, dropping on backpressure rather than
@@ -35,9 +32,8 @@ pub(crate) fn emit(event: InputEvent) {
     }
 }
 
-/// Install the global sender, rejecting if one is already live: a second
-/// `events()` would overwrite it and the old hook thread would keep pushing into
-/// the new channel (double-play).
+/// Install the global sender, rejecting if one is already live (a second
+/// `events()` would overwrite it and the old hook thread would double-play).
 fn try_start_sender(tx: Sender<InputEvent>) -> Result<(), BackendError> {
     let mut guard = SENDER
         .lock()
@@ -55,8 +51,7 @@ fn clear_sender() {
     }
 }
 
-/// Clears the global sender when dropped, so a dropped stream cannot leave a
-/// stale sender behind for a lingering hook thread.
+/// Clears the global sender on drop, so a dropped stream leaves no stale sender.
 struct GuardedSenderStream {
     inner: ReceiverStream<InputEvent>,
 }
@@ -83,8 +78,8 @@ impl Drop for GuardedSenderStream {
     }
 }
 
-/// Handshake passed to the hook thread's `install` closure. Report `ok`/`fail`
-/// once the hook is installed; dropping it counts as a failure.
+/// Handshake passed to the hook thread's `install` closure: report ok/fail once
+/// the hook is installed; dropping it counts as a failure.
 pub(crate) struct Ready {
     tx: std_mpsc::Sender<Result<(), BackendError>>,
 }
@@ -100,10 +95,7 @@ impl Ready {
 }
 
 /// Spawn `install` on a dedicated thread and bridge its callbacks into a stream.
-///
-/// `install` runs on the new thread and receives a [`Ready`] handle; it must
-/// report success or failure once the hook is installed. `ready_timeout` bounds
-/// how long we wait for that report.
+/// `ready_timeout` bounds how long we wait for the start handshake.
 pub(crate) fn start_bridged(
     thread_name: &str,
     ready_timeout: Option<Duration>,

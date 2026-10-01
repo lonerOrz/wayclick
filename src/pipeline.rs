@@ -1,12 +1,4 @@
-//! Pipeline: map -> execute, with lightweight metrics.
-//!
-//! `Pipeline` owns the compiled rules, the default sound ids, and the counters.
-//! It pulls `InputEvent`s from a backend stream and drives them to the audio
-//! `engine`, which owns sample decoding — the pipeline only deals in `SoundId`s.
-//!
-//! There is no filter stage here: backends drop the events they don't want
-//! (trackpads, auto-repeats) before they reach the stream, so every event the
-//! pipeline sees is one it should act on.
+//! Pipeline: map `InputEvent`s to actions, with lightweight counters.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,8 +9,7 @@ use crate::audio::AudioEngine;
 use crate::config::CompiledConfig;
 use crate::domain::{Action, CompiledRule, InputEvent, SoundId};
 
-/// Counters for the whole pipeline. `AtomicU64` — no locks, cheap to bump from
-/// many tasks. Logged once on shutdown.
+/// Counters for the whole pipeline; logged once on shutdown.
 #[derive(Debug, Default)]
 pub struct Metrics {
     pub received: AtomicU64,
@@ -44,8 +35,7 @@ impl Pipeline {
         }
     }
 
-    /// A handle to the pipeline counters, cloned out before the pipeline is
-    /// moved into the runtime.
+    /// A handle to the counters, cloned out before the pipeline moves into the runtime.
     pub fn metrics(&self) -> Arc<Metrics> {
         self.metrics.clone()
     }
@@ -54,7 +44,7 @@ impl Pipeline {
     pub fn handle(&self, event: InputEvent) {
         self.metrics.received.fetch_add(1, Ordering::Relaxed);
 
-        // Map: first matching rule wins; otherwise fall back to a random default.
+        // First matching rule wins; otherwise a random default.
         if let Some(rule) = self.rules.iter().find(|rule| rule.trigger == event) {
             for action in &rule.actions {
                 let Action::PlaySound(id) = action;
@@ -80,8 +70,8 @@ impl Pipeline {
     }
 }
 
-/// Pick a random index in `0..n` from a thread-local `SmallRng`, so the pipeline
-/// holds no shared RNG state.
+/// Pick a random index in `0..n` from a thread-local RNG, so the pipeline holds
+/// no shared RNG state.
 fn fastrand(n: usize) -> usize {
     use rand::Rng;
     use rand::SeedableRng;

@@ -1,10 +1,5 @@
-//! Linux backend: evdev (Wayland-safe, keyboard + mouse).
-//!
-//! Scans `/dev/input`, opens each keyboard/mouse once, and forwards press-edge
-//! events as `InputEvent`s over an mpsc channel. Trackpad presses are never
-//! forwarded unless `enable_trackpads` is set. Hotplug re-scans every 3s.
-//! SIGINT/SIGTERM end the driver task, which stops the device tasks so every
-//! sender drops and the channel closes.
+//! Linux backend: evdev (Wayland-safe, keyboard + mouse). Scans `/dev/input`,
+//! forwards press-edge events, hotplugs every 3s, and stops on SIGINT/SIGTERM.
 
 use std::collections::HashSet;
 use std::io::ErrorKind;
@@ -28,8 +23,8 @@ const HOTPLUG_INTERVAL: Duration = Duration::from_secs(3);
 /// Linux evdev input backend.
 pub struct EvdevBackend {
     enable_trackpads: bool,
-    /// The runtime the driver task is spawned on. Held explicitly so `events`
-    /// never depends on an ambient runtime context.
+    /// The runtime the driver task is spawned on, so `events` never depends on
+    /// an ambient runtime context.
     runtime: tokio::runtime::Handle,
 }
 
@@ -46,10 +41,9 @@ impl InputBackend for EvdevBackend {
     fn events(&mut self) -> Result<BoxStream<'static, InputEvent>, BackendError> {
         let enable_trackpads = self.enable_trackpads;
 
-        // Open every device once, up front. Doing the open here (rather than via
-        // `evdev::enumerate`, which silently skips unopenable nodes) lets us tell
-        // "no input devices" from "no permission", and hands the already-open
-        // devices to the driver task without a second open or a probe/use race.
+        // Open each device once here (rather than via `evdev::enumerate`, which
+        // silently skips unopenable nodes): that lets us tell "no devices" from
+        // "no permission", with no second open and no probe/use race.
         let (devices, denied) = open_devices();
         let interesting: Vec<(PathBuf, Device)> = devices
             .into_iter()
@@ -105,8 +99,7 @@ impl InputBackend for EvdevBackend {
                 }
             }
 
-            // Stop forwarding and drop every sender so the receiver sees the
-            // channel close and the stream ends.
+            // Drop every sender so the receiver sees the channel close.
             tasks.shutdown().await;
         });
 
@@ -133,9 +126,8 @@ fn add_device(
         return;
     }
 
-    // Trackpad input is off by default. Drop it here — the one place that knows
-    // the device — so nothing downstream has to filter. Still record the path so
-    // hotplug doesn't keep rescanning it.
+    // Trackpad input is off by default: drop it here, the one place that knows
+    // the device. Still record the path so hotplug doesn't rescan it.
     if looks_like_trackpad(&dev) && !enable_trackpads {
         known.lock().unwrap().insert(path);
         return;
@@ -155,8 +147,8 @@ fn add_device(
     tasks.spawn(forward(path, stream, tx.clone(), known.clone()));
 }
 
-/// Forward press-edge events from one device until it disappears, then drop the
-/// device from `known` so hotplug can pick it up again.
+/// Forward press-edge events from one device until it disappears, then drop it
+/// from `known` so hotplug can pick it up again.
 async fn forward(
     path: PathBuf,
     mut stream: EventStream,
@@ -187,8 +179,7 @@ async fn forward(
     known.lock().unwrap().remove(&path);
 }
 
-/// Scan `/dev/input/event*`, opening each node. Returns the open devices plus
-/// whether any open was denied by permissions.
+/// Scan `/dev/input/event*` and open each node, tracking permission denials.
 fn open_devices() -> (Vec<(PathBuf, Device)>, bool) {
     let mut devices = Vec::new();
     let mut denied = false;
@@ -213,19 +204,18 @@ fn open_devices() -> (Vec<(PathBuf, Device)>, bool) {
     (devices, denied)
 }
 
-/// Trackpads are identified by device name (see [`is_trackpad_name`]).
+/// Trackpads are identified by device name.
 fn looks_like_trackpad(dev: &Device) -> bool {
     dev.name().is_some_and(is_trackpad_name)
 }
 
-/// The trackpad name heuristic, split out so the policy has a test surface.
+/// The trackpad name heuristic, split out so it has a test surface.
 fn is_trackpad_name(name: &str) -> bool {
     let name = name.to_lowercase();
     name.contains("touchpad") || name.contains("trackpad")
 }
 
-/// Map an evdev `KeyCode` to our `InputEvent`. Mouse buttons become `Mouse`,
-/// everything else is a keyboard `Key(code)`.
+/// Map an evdev `KeyCode` to our `InputEvent`.
 fn translate_key(code: KeyCode) -> InputEvent {
     InputEvent::from_evdev_code(code.code())
 }

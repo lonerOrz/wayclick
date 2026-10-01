@@ -1,8 +1,4 @@
 //! Input backends: each platform translates its native events into `InputEvent`.
-//!
-//! `InputBackend::events` returns a stream the pipeline consumes. Backends own
-//! their platform specifics (evdev / Win32 hooks / CGEventTap) *and* their own
-//! filtering: an event a backend doesn't want is simply never emitted.
 
 use crate::domain::InputEvent;
 
@@ -14,22 +10,16 @@ pub mod macos_backend;
 pub mod windows_backend;
 
 /// Bridge for backends whose events arrive on a foreign (non-tokio) thread.
-///
-/// Windows and macOS hook callbacks are `extern` functions that cannot be async,
-/// so they push into a process-global sender that this module owns. evdev does
-/// not use it: it can spawn tokio tasks directly.
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) mod bridge;
 
-/// A platform input source.
+/// A platform input source. Backends filter their own events: anything they
+/// don't want is simply never emitted.
 pub trait InputBackend: Send {
     /// Spawn the listener and return a stream of normalized events.
-    ///
-    /// The stream is owned by the caller; the backend keeps running until the
-    /// stream (and any internal task) is dropped.
     fn events(&mut self) -> Result<BoxStream<'static, InputEvent>, BackendError>;
 
-    /// Human-readable backend name (for `check` / diagnostics).
+    /// Human-readable backend name.
     fn name(&self) -> &'static str;
 }
 
@@ -43,19 +33,15 @@ pub enum BackendError {
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[error("backend failed to start: {0}")]
     Start(String),
-    /// The process lacks permission to observe input devices / the event tap.
+    /// Missing permission to observe input devices / the event tap.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[error("accessibility/input permission denied")]
     Permission,
 }
 
-/// Construct the backend for the current platform.
-///
-/// `enable_trackpads` and `runtime` are both Linux-only: evdev can tell a
-/// trackpad from a keyboard by name, and it spawns its driver on the runtime,
-/// while the Windows/macOS hooks do neither (they run on foreign threads).
-/// Handing the runtime in here keeps the "must be inside a runtime" precondition
-/// out of the `InputBackend` interface — a caller cannot forget it.
+/// Construct the backend for the current platform. `enable_trackpads` and
+/// `runtime` are Linux-only (evdev names trackpads and spawns on the runtime);
+/// taking the runtime here keeps "must be inside a runtime" out of the trait.
 pub fn for_current_platform(
     enable_trackpads: bool,
     runtime: tokio::runtime::Handle,

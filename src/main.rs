@@ -1,10 +1,5 @@
-//! wayclick — low-latency input sound engine (Rust rewrite).
-//!
-//! Subcommands:
-//! - `run`  (default): launcher behavior — permission/config checks, then start
-//!   the input listener. This is what `nix run .#wayclick` launches.
-//! - `check`: headless self-check — load config, decode audio, list sounds.
-//!   Proves "it really runs" without capturing input or needing root.
+//! wayclick CLI. `run` (default) starts the listener; `check` is a headless
+//! self-test that decodes audio without touching the input devices.
 
 use std::path::PathBuf;
 
@@ -70,9 +65,8 @@ fn user_config_dir() -> PathBuf {
     PathBuf::from("config")
 }
 
-/// Locate the bundled default config dir (config.json + wavs). Checks the dev
-/// `assets/default` next to the CWD, then the nix-installed `share/wayclick/config`
-/// relative to the executable. Returns the first that has a `config.json`.
+/// Locate the bundled default config dir (dev `assets/default`, then the
+/// nix-installed `share/wayclick/config` next to the executable).
 fn default_config_dir() -> Option<PathBuf> {
     let mut candidates = vec![PathBuf::from("assets/default")];
     if let Some(dir) = std::env::current_exe()
@@ -102,8 +96,6 @@ fn main() {
 
     let code = match cli.command.unwrap_or(Command::Run) {
         Command::Run => {
-            // Launcher-style guards (mirror wayclick.py): refuse root, require
-            // input group on Linux, require config.json.
             if let Err(msg) = launcher_checks(&app) {
                 tracing::error!("{msg}");
                 eprintln!("wayclick: {msg}");
@@ -118,7 +110,7 @@ fn main() {
     std::process::exit(code);
 }
 
-/// Permission/config checks before starting the listener (launcher behavior).
+/// Launcher guards: refuse root, require the `input` group on Linux.
 #[cfg(target_os = "linux")]
 fn launcher_checks(app: &app::App) -> Result<(), String> {
     let _ = app;
@@ -131,9 +123,8 @@ fn launcher_checks(app: &app::App) -> Result<(), String> {
     Ok(())
 }
 
-/// Check `input` group membership via `getgroups(2)` — no subprocess, works in
-/// minimal containers where `groups`(1) may be absent. evdev's own open() probe
-/// is the final authority on permission; this is a fast pre-flight guard.
+/// `input` group membership via `getgroups(2)` — no subprocess. evdev's own
+/// open() probe is the final authority on permission; this is a fast pre-flight.
 #[cfg(target_os = "linux")]
 fn in_input_group() -> bool {
     let gid = unsafe { libc::getgid() };

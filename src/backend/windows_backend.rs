@@ -1,8 +1,5 @@
-//! Windows backend: low-level keyboard/mouse hooks via `windows-sys`.
-//!
-//! `SetWindowsHookExW(WH_KEYBOARD_LL / WH_MOUSE_LL)` are installed on a dedicated
-//! thread that runs a `GetMessageW` pump; the callbacks push normalized events
-//! through the shared [`bridge`]. `HOOKPROC` returns `LRESULT` (isize), not `c_int`.
+//! Windows backend: low-level keyboard/mouse hooks via `windows-sys`. The hooks
+//! run on a dedicated `GetMessageW` pump thread and push through [`bridge`].
 
 use std::collections::HashSet;
 use std::sync::{LazyLock, Mutex};
@@ -23,10 +20,8 @@ use crate::domain::{InputEvent, MouseButton};
 /// exactly one press per physical key-down.
 static PRESSED: LazyLock<Mutex<HashSet<u16>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-/// Windows input backend using Win32 low-level hooks.
-///
-/// The low-level mouse hook cannot distinguish a trackpad from a mouse, so there
-/// is no trackpad policy here (see `backend::evdev_backend`).
+/// Windows input backend. The mouse hook cannot tell a trackpad from a mouse, so
+/// there is no trackpad policy here (see `backend::evdev_backend`).
 pub struct WindowsBackend;
 
 impl InputBackend for WindowsBackend {

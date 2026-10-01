@@ -1,9 +1,6 @@
-//! wayclick — low-latency input sound engine (Rust rewrite).
-//!
-//! Library crate holding all business logic. The binary in `src/main.rs` is a
-//! thin wrapper. Splitting into lib/bin lets `cargo clippy --all-targets` treat
-//! the platform backends as public library surfaces, so cross-platform code that
-//! is only reachable via `cfg`-gated dynamic dispatch is not flagged dead-code.
+//! Library crate: all business logic; `src/main.rs` is a thin CLI wrapper. The
+//! split also keeps the cfg-gated backends visible to clippy as public surface,
+//! so cross-platform code isn't flagged dead.
 
 pub mod app;
 pub mod audio;

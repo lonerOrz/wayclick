@@ -1,10 +1,4 @@
-//! App: composition root — owns the audio engine, wires the platform backend to
-//! the pipeline, and runs until shutdown.
-//!
-//! Lifecycle: `RodioEngine` (and its `MixerDeviceSink`) is owned here, so
-//! playback stops only when `App` is dropped. The backend spawns its own tasks
-//! and pushes `InputEvent`s down a channel; `App` drives the pipeline until the
-//! stream ends (the backend's own signal handling stops it).
+//! App: composition root — wires the platform backend to the pipeline.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,8 +25,7 @@ impl App {
         }
     }
 
-    /// Load config, build the engine + pipeline, and run the input listener.
-    /// Returns the process exit code.
+    /// Run the input listener; returns the process exit code.
     pub fn run(self) -> i32 {
         let Some(config) = self.load_config() else {
             return 1;
@@ -57,9 +50,8 @@ impl App {
         let pipeline = Pipeline::new(config, engine);
         let metrics = pipeline.metrics();
 
-        // Build the runtime first and hand it to the backend: the Linux backend
-        // spawns its driver task on it, so `events()` must not rely on an ambient
-        // runtime context. The pipeline is then driven on the same runtime.
+        // Build the runtime first and hand it to the backend: evdev spawns its
+        // driver task on it, so `events()` must not rely on an ambient runtime.
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -88,8 +80,7 @@ impl App {
         0
     }
 
-    /// Headless self-check: load config + decode audio, report, exit. Decoding
-    /// needs no audio device, so this works on a headless machine.
+    /// Headless self-check: load config + decode audio. Needs no audio device.
     pub fn check(self) -> i32 {
         let Some(config) = self.load_config() else {
             return 1;
@@ -118,7 +109,6 @@ impl App {
         0
     }
 
-    /// Load and log the config, shared by `run` and `check`.
     fn load_config(&self) -> Option<CompiledConfig> {
         let source = FileConfigSource::new(&self.config_dir);
         match source.load() {

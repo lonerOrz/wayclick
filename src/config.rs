@@ -1,8 +1,4 @@
-//! Configuration: load JSON, then *compile* it into `SoundId`-only rules.
-//!
-//! The hot path (the pipeline) only ever sees `CompiledConfig`, which holds
-//! `SoundId`s. Filename strings are resolved exactly once, at load time, in
-//! `compile()`. There is no `HashMap<String, _>` consulted per keypress.
+//! Configuration: load JSON, then compile it into `SoundId`-only rules.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -11,37 +7,35 @@ use serde::Deserialize;
 
 use crate::domain::{Action, CompiledRule, InputEvent, SoundId};
 
-/// Raw JSON shape (what lives in `config.json`).
+/// Raw JSON shape (`config.json`).
 #[derive(Debug, Deserialize)]
 pub struct RawConfig {
-    /// Sounds played when a key has no explicit mapping.
+    /// Played when a key has no explicit mapping.
     #[serde(default)]
     pub defaults: Vec<String>,
-    /// `"<keycode>" -> "<soundfile.wav>"`. Keys are strings (JSON object keys).
+    /// `"<keycode>" -> "<soundfile.wav>"`.
     #[serde(default)]
     pub mappings: HashMap<String, String>,
 }
 
-/// A resolved sound table: filename -> `SoundId`.
-///
-/// `sounds[0]` is unused (SoundId is NonZero). `sounds[i]` is `Some` when the
-/// file decoded successfully, `None` when missing/invalid.
+/// The compiled config. `sounds[0]` is unused (SoundId is NonZero); `sounds[i]`
+/// is `None` when that file is missing or invalid.
 #[derive(Debug, Clone)]
 pub struct CompiledConfig {
     /// Indexed by `SoundId.get() - 1`.
     pub sounds: Vec<Option<String>>,
     pub rules: Vec<CompiledRule>,
-    /// `SoundId`s that are defaults (played when a key has no explicit mapping).
+    /// Played when a key has no explicit mapping.
     pub default_ids: Vec<SoundId>,
 }
 
 impl CompiledConfig {
-    /// Number of sound slots (SoundId values are 1..=len).
+    /// Number of sound slots (SoundId values are `1..=len`).
     pub fn sound_count(&self) -> u16 {
         self.sounds.len() as u16
     }
 
-    /// Look up the filename for a `SoundId` (for diagnostics/logging).
+    /// Filename for a `SoundId` (diagnostics only).
     pub fn filename(&self, id: SoundId) -> Option<&str> {
         self.sounds
             .get((id.get() - 1) as usize)
@@ -49,10 +43,8 @@ impl CompiledConfig {
     }
 }
 
-/// Source of configuration. `FileConfigSource` is the v1 impl; the trait is the
-/// seam for hot-reload (a future `WatchedConfigSource`) without touching callers.
+/// Source of configuration; the trait is the seam for hot-reload.
 pub trait ConfigSource {
-    /// Load and compile the configuration.
     fn load(&self) -> Result<CompiledConfig, ConfigError>;
 }
 
@@ -91,14 +83,9 @@ impl ConfigSource for FileConfigSource {
     }
 }
 
-/// Resolve a `RawConfig` into a `CompiledConfig`.
-///
-/// All distinct filenames (defaults + mappings values) are assigned a `SoundId`
-/// in first-seen order. Each mapping key is parsed: numeric keys become
-/// `InputEvent::Key(code)`; the three well-known mouse keys (`272`/`273`/`274`)
-/// become `InputEvent::Mouse(..)`. Everything else is ignored.
+/// Resolve a `RawConfig` into a `CompiledConfig`: every distinct filename gets a
+/// `SoundId` (first-seen order), and every numeric mapping key becomes a trigger.
 pub fn compile(raw: RawConfig) -> Result<CompiledConfig, ConfigError> {
-    // Assign a SoundId to every distinct filename.
     let mut name_to_id: HashMap<String, SoundId> = HashMap::new();
     let mut sounds: Vec<Option<String>> = Vec::new(); // sounds[0] stays None (SoundId is NonZero)
 
@@ -130,7 +117,6 @@ pub fn compile(raw: RawConfig) -> Result<CompiledConfig, ConfigError> {
         .filter_map(|d| name_to_id.get(d).copied())
         .collect();
 
-    // Build rules from mappings.
     let mut rules: Vec<CompiledRule> = Vec::new();
     for (key, value) in &raw.mappings {
         let Some(trigger) = parse_trigger(key) else {
@@ -143,8 +129,6 @@ pub fn compile(raw: RawConfig) -> Result<CompiledConfig, ConfigError> {
         rules.push(CompiledRule::new(trigger, actions));
     }
 
-    // A synthetic default rule: any unmapped key plays a random default sound.
-    // The executor falls back to `default_ids` when no rule matches.
     Ok(CompiledConfig {
         sounds,
         rules,
@@ -152,11 +136,8 @@ pub fn compile(raw: RawConfig) -> Result<CompiledConfig, ConfigError> {
     })
 }
 
-/// Parse a JSON mapping key into an `InputEvent` trigger.
-///
-/// - `"272" | "273" | "274"` -> mouse buttons (mirrors the Python config).
-/// - any other parseable `u16` -> `InputEvent::Key(code)`.
-/// - anything else -> `None` (skipped).
+/// Parse a JSON mapping key into an `InputEvent` trigger; non-numeric keys are
+/// skipped.
 fn parse_trigger(key: &str) -> Option<InputEvent> {
     let code = key.parse::<u16>().ok()?;
     Some(InputEvent::from_evdev_code(code))
@@ -182,7 +163,6 @@ mod tests {
     #[test]
     fn compiles_filenames_to_sound_ids() {
         let cfg = compile(sample()).unwrap();
-        // 5 distinct filenames: key1, key3, ctrl, mouse -> 4 sounds.
         assert_eq!(cfg.sound_count(), 4);
     }
 
@@ -200,7 +180,7 @@ mod tests {
     #[test]
     fn drops_non_numeric_key() {
         let cfg = compile(sample()).unwrap();
-        // "notanum" is not a keycode, so only "1", "2" and "272" produce rules.
+        // Only "1", "2" and "272" produce rules.
         assert_eq!(cfg.rules.len(), 3);
     }
 }
