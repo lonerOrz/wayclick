@@ -98,6 +98,20 @@ pub enum InputEvent {
     Mouse(MouseButton),
 }
 
+impl InputEvent {
+    /// Map a numeric keycode to an `InputEvent`.
+    ///
+    /// Mouse buttons use the canonical evdev `BTN_*` numbers, which the JSON
+    /// config also uses; any other code is a keyboard `Key(code)`. This is the
+    /// one ladder shared by config parsing and the evdev backend.
+    pub fn from_evdev_code(code: u16) -> InputEvent {
+        match MouseButton::from_evdev_code(code) {
+            Some(button) => InputEvent::Mouse(button),
+            None => InputEvent::Key(code),
+        }
+    }
+}
+
 /// An action the executor can perform. v1 has exactly one variant.
 ///
 /// New variants (Notify, Http, Mqtt) are a *seam*: add them here when needed,
@@ -158,5 +172,14 @@ mod tests {
         assert_eq!(MouseButton::from_cg_button_number(9), MouseButton::Other(9));
         assert_eq!(MouseButton::from_windows_xbutton(1), MouseButton::Back);
         assert_eq!(MouseButton::from_windows_xbutton(2), MouseButton::Forward);
+    }
+
+    #[test]
+    fn input_event_from_evdev_code() {
+        assert_eq!(
+            InputEvent::from_evdev_code(0x110),
+            InputEvent::Mouse(MouseButton::Left)
+        );
+        assert_eq!(InputEvent::from_evdev_code(30), InputEvent::Key(30)); // KEY_A
     }
 }

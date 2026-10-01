@@ -20,7 +20,7 @@ use tokio::task::JoinSet;
 use tokio_stream::wrappers::ReceiverStream;
 
 use super::{BackendError, InputBackend};
-use crate::domain::{InputEvent, MouseButton};
+use crate::domain::InputEvent;
 
 const CHANNEL_CAP: usize = 1024;
 const HOTPLUG_INTERVAL: Duration = Duration::from_secs(3);
@@ -227,11 +227,7 @@ fn is_trackpad_name(name: &str) -> bool {
 /// Map an evdev `KeyCode` to our `InputEvent`. Mouse buttons become `Mouse`,
 /// everything else is a keyboard `Key(code)`.
 fn translate_key(code: KeyCode) -> InputEvent {
-    let raw = code.code();
-    match MouseButton::from_evdev_code(raw) {
-        Some(button) => InputEvent::Mouse(button),
-        None => InputEvent::Key(raw),
-    }
+    InputEvent::from_evdev_code(code.code())
 }
 
 /// A device is interesting if it looks like a keyboard or a mouse.
@@ -257,6 +253,7 @@ fn is_mouse(dev: &Device) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::MouseButton;
 
     #[test]
     fn translate_key_maps_buttons() {

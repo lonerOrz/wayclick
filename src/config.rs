@@ -9,7 +9,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::domain::{Action, CompiledRule, InputEvent, MouseButton, SoundId};
+use crate::domain::{Action, CompiledRule, InputEvent, SoundId};
 
 /// Raw JSON shape (what lives in `config.json`).
 #[derive(Debug, Deserialize)]
@@ -159,15 +159,13 @@ pub fn compile(raw: RawConfig) -> Result<CompiledConfig, ConfigError> {
 /// - anything else -> `None` (skipped).
 fn parse_trigger(key: &str) -> Option<InputEvent> {
     let code = key.parse::<u16>().ok()?;
-    Some(match MouseButton::from_evdev_code(code) {
-        Some(button) => InputEvent::Mouse(button),
-        None => InputEvent::Key(code),
-    })
+    Some(InputEvent::from_evdev_code(code))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::MouseButton;
 
     fn sample() -> RawConfig {
         RawConfig {
