@@ -61,7 +61,6 @@ impl MouseButton {
     }
 
     /// Map a macOS `OtherMouseDown` button number (0..=4) to a button.
-    #[allow(dead_code)] // used only by the macOS backend (cfg-gated).
     pub fn from_cg_button_number(n: i64) -> MouseButton {
         match n {
             0 => MouseButton::Left,
@@ -75,7 +74,6 @@ impl MouseButton {
 
     /// Map a Windows `WM_XBUTTONDOWN` extra-button id (1 or 2) to a button.
     /// 1 = XBUTTON1 (Back), any other value = XBUTTON2 (Forward).
-    #[allow(dead_code)] // used only by the Windows backend (cfg-gated).
     pub fn from_windows_xbutton(x_id: u16) -> MouseButton {
         if x_id == 1 {
             MouseButton::Back
@@ -87,7 +85,9 @@ impl MouseButton {
 
 /// A normalized input event flowing through the pipeline.
 ///
-/// Backends translate their platform-specific events into this enum. `value`
+/// Backends translate their platform-specific events into this enum and drop
+/// anything they don't want (trackpads, auto-repeats) before it gets here, so
+/// every value in the stream is something the pipeline should consider. `value`
 /// semantics (press/release/repeat) are already collapsed: we only emit `Key`
 /// on the *press* edge, so there is no double-play (the macOS Python bug).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -96,8 +96,6 @@ pub enum InputEvent {
     Key(u16),
     /// A mouse button press.
     Mouse(MouseButton),
-    /// Something we detected but don't handle (e.g. a trackpad, a repeat).
-    Ignored,
 }
 
 /// An action the executor can perform. v1 has exactly one variant.

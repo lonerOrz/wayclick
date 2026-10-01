@@ -202,6 +202,7 @@ mod tests {
     #[test]
     fn drops_non_numeric_key() {
         let cfg = compile(sample()).unwrap();
-        assert!(!cfg.rules.iter().any(|r| r.trigger == InputEvent::Ignored));
+        // "notanum" is not a keycode, so only "1", "2" and "272" produce rules.
+        assert_eq!(cfg.rules.len(), 3);
     }
 }

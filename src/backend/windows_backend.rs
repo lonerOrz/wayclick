@@ -1,95 +1,50 @@
-//! Windows backend: low-level keyboard/mouse hooks via windows-sys.
+//! Windows backend: low-level keyboard/mouse hooks via `windows-sys`.
 //!
-//! Implements `InputBackend` using `windows-sys` 0.59:
-//! - `SetWindowsHookExW(WH_KEYBOARD_LL / WH_MOUSE_LL, Some(proc), null, 0)`
-//! - HOOKPROC returns `LRESULT` (isize) — NOT c_int (the Python bug)
-//! - `KBDLLHOOKSTRUCT.vkCode` -> `InputEvent::Key(vkCode)` on WM_KEYDOWN
-//! - `MSLLHOOKSTRUCT` + wparam -> `InputEvent::Mouse(..)`
-//! - message pump `GetMessageW` on a dedicated `std::thread`; bridged to the
-//!   stream via a bounded tokio mpsc channel.
-//!
-//! Lifetime: the hooks live for the whole process. wayclick runs until SIGINT;
-//! the App shuts down by dropping. We do not uninstall the hooks — the process
-//! exit tears down the pump thread. The stream ends when all senders drop.
+//! `SetWindowsHookExW(WH_KEYBOARD_LL / WH_MOUSE_LL)` are installed on a dedicated
+//! thread that runs a `GetMessageW` pump; the callbacks push normalized events
+//! through the shared [`bridge`]. `HOOKPROC` returns `LRESULT` (isize), not `c_int`.
+
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex};
 
 use futures::stream::BoxStream;
-
-use crate::backend::{BackendError, InputBackend};
-use crate::domain::InputEvent;
-
-/// A platform input source using Win32 low-level hooks.
-#[allow(dead_code)]
-pub struct WindowsBackend {
-    /// Kept for API parity with the Linux backend; trackpad filtering is N/A on
-    /// Windows (the low-level mouse hook does not distinguish trackpads).
-    enable_trackpads: bool,
-}
-
-#[allow(dead_code)]
-impl WindowsBackend {
-    pub fn new(enable_trackpads: bool) -> WindowsBackend {
-        WindowsBackend { enable_trackpads }
-    }
-}
-
-impl InputBackend for WindowsBackend {
-    fn name(&self) -> &'static str {
-        "windows-low-level-hook"
-    }
-
-    #[cfg(target_os = "windows")]
-    fn events(&mut self) -> Result<BoxStream<'static, InputEvent>, BackendError> {
-        start()
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    fn events(&mut self) -> Result<BoxStream<'static, InputEvent>, BackendError> {
-        let _ = &self.enable_trackpads;
-        Err(BackendError::Permission)
-    }
-}
-
-#[cfg(target_os = "windows")]
-use std::collections::HashSet;
-#[cfg(target_os = "windows")]
-use std::sync::Mutex;
-
-#[cfg(target_os = "windows")]
-use futures::StreamExt;
-#[cfg(target_os = "windows")]
-use tokio::sync::mpsc;
-#[cfg(target_os = "windows")]
-use tokio_stream::wrappers::ReceiverStream;
-
-#[cfg(target_os = "windows")]
 use windows_sys::Win32::Foundation::{GetLastError, HINSTANCE, LPARAM, LRESULT, WPARAM};
-#[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, SetWindowsHookExW,
     WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
     WM_RBUTTONDOWN, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN,
 };
 
-#[cfg(target_os = "windows")]
-use crate::backend::{CHANNEL_CAP, GuardedSenderStream, emit, try_start_sender};
-#[cfg(target_os = "windows")]
-use crate::domain::MouseButton;
+use crate::backend::bridge::{self, emit};
+use crate::backend::{BackendError, InputBackend};
+use crate::domain::{InputEvent, MouseButton};
 
-// WH_KEYBOARD_LL does not surface OS auto-repeat (the repeat count lives in the
-// higher-level key messages, not in KBDLLHOOKSTRUCT). Track held keys ourselves
-// so a held key emits exactly one press.
-#[cfg(target_os = "windows")]
-static PRESSED: std::sync::LazyLock<Mutex<HashSet<u16>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
+/// WH_KEYBOARD_LL does not surface OS auto-repeat, so track held keys to emit
+/// exactly one press per physical key-down.
+static PRESSED: LazyLock<Mutex<HashSet<u16>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-#[cfg(target_os = "windows")]
+/// Windows input backend using Win32 low-level hooks.
+///
+/// The low-level mouse hook cannot distinguish a trackpad from a mouse, so there
+/// is no trackpad policy here (see `backend::evdev_backend`).
+pub struct WindowsBackend;
+
+impl InputBackend for WindowsBackend {
+    fn events(&mut self) -> Result<BoxStream<'static, InputEvent>, BackendError> {
+        start()
+    }
+
+    fn name(&self) -> &'static str {
+        "windows-low-level-hook"
+    }
+}
+
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
-        let msg = wparam as u32;
         // SAFETY: lparam points to a KBDLLHOOKSTRUCT for WH_KEYBOARD_LL.
         let kb = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
         let vk = kb.vkCode as u16;
-        match msg {
+        match wparam as u32 {
             WM_KEYDOWN | WM_SYSKEYDOWN => {
                 if let Ok(mut set) = PRESSED.lock()
                     && set.insert(vk)
@@ -105,14 +60,13 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
             _ => {}
         }
     }
-    // SAFETY: passing the original hook arguments through unchanged.
+    // SAFETY: pass the original hook arguments through unchanged.
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
 }
 
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
-        let msg = wparam as u32;
-        let button = match msg {
+        let button = match wparam as u32 {
             WM_LBUTTONDOWN => Some(MouseButton::Left),
             WM_RBUTTONDOWN => Some(MouseButton::Right),
             WM_MBUTTONDOWN => Some(MouseButton::Middle),
@@ -124,71 +78,43 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
             }
             _ => None,
         };
-        if let Some(b) = button {
-            emit(InputEvent::Mouse(b));
+        if let Some(button) = button {
+            emit(InputEvent::Mouse(button));
         }
     }
-    // SAFETY: passing the original hook arguments through unchanged.
+    // SAFETY: pass the original hook arguments through unchanged.
     unsafe { CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam) }
 }
 
-pub fn start() -> Result<BoxStream<'static, InputEvent>, BackendError> {
-    let (tx, rx) = mpsc::channel::<InputEvent>(CHANNEL_CAP);
-    try_start_sender(tx)?;
+fn start() -> Result<BoxStream<'static, InputEvent>, BackendError> {
+    bridge::start_bridged("wayclick-win-hooks", None, |ready| {
+        // SAFETY: hooks must be installed on the thread that runs the message
+        // pump; null HINSTANCE + thread id 0 installs a global low-level hook.
+        unsafe {
+            let null_hmod: HINSTANCE = std::ptr::null_mut();
 
-    // Handshake so we surface hook-install failure from the pump thread.
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
-
-    std::thread::Builder::new()
-        .name("wayclick-win-hooks".into())
-        .spawn(move || {
-            // SAFETY: hooks must be installed on the thread that runs the
-            // message pump; that is this thread. null HINSTANCE + thread id 0
-            // installs a global low-level hook.
-            unsafe {
-                let null_hmod: HINSTANCE = std::ptr::null_mut();
-                let kb_hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), null_hmod, 0);
-                if kb_hook.is_null() {
-                    let _ = ready_tx.send(Err(format!(
-                        "SetWindowsHookExW(WH_KEYBOARD_LL) failed: GetLastError={}",
-                        GetLastError()
-                    )));
-                    return;
-                }
-
-                let mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), null_hmod, 0);
-                if mouse_hook.is_null() {
-                    let _ = ready_tx.send(Err(format!(
-                        "SetWindowsHookExW(WH_MOUSE_LL) failed: GetLastError={}",
-                        GetLastError()
-                    )));
-                    return;
-                }
-
-                let _ = ready_tx.send(Ok(()));
-                tracing::info!("windows low-level hooks installed");
-
-                // Message pump. GetMessageW returns BOOL: 0 = WM_QUIT, -1 = error.
-                let mut msg: MSG = std::mem::zeroed();
-                loop {
-                    let ret = GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0);
-                    if ret == 0 || ret == -1 {
-                        break;
-                    }
-                }
-                tracing::info!("windows hook message pump exited");
+            if SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), null_hmod, 0).is_null() {
+                ready.fail(BackendError::Start(format!(
+                    "SetWindowsHookExW(WH_KEYBOARD_LL) failed: GetLastError={}",
+                    GetLastError()
+                )));
+                return;
             }
-        })
-        .map_err(|e| BackendError::Start(format!("failed to spawn hook thread: {e}")))?;
+            if SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), null_hmod, 0).is_null() {
+                ready.fail(BackendError::Start(format!(
+                    "SetWindowsHookExW(WH_MOUSE_LL) failed: GetLastError={}",
+                    GetLastError()
+                )));
+                return;
+            }
 
-    match ready_rx.recv() {
-        Ok(Ok(())) => Ok(GuardedSenderStream::new(ReceiverStream::new(rx)).boxed()),
-        Ok(Err(msg)) => {
-            tracing::error!("{msg}");
-            Err(BackendError::Start(msg))
+            ready.ok();
+            tracing::info!("windows low-level hooks installed");
+
+            // GetMessageW: 0 = WM_QUIT, -1 = error.
+            let mut msg: MSG = std::mem::zeroed();
+            while !matches!(GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0), 0 | -1) {}
+            tracing::info!("windows hook message pump exited");
         }
-        Err(_) => Err(BackendError::Start(
-            "hook thread died before installing hooks".into(),
-        )),
-    }
+    })
 }

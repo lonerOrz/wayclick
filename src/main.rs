@@ -50,8 +50,7 @@ fn resolve_config_dir() -> PathBuf {
 }
 
 fn user_config_dir() -> PathBuf {
-    // Mirror the Python `platform_paths.config_dir`: mirrors the launcher's
-    // platform-specific resolution. Keep in sync with src/platform_paths.py.
+    // `~/.config/wayclick` on Linux, `~/Library/Application Support/wayclick` on macOS.
     let home = std::env::var_os("HOME").map(PathBuf::from);
     #[cfg(target_os = "macos")]
     {

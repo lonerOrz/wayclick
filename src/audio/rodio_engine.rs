@@ -194,10 +194,4 @@ impl AudioEngine for RodioEngine {
         };
         self.sink.mixer().add(source);
     }
-
-    fn stop(&self) {
-        // ponytail: the App owns the engine's lifetime; dropping it drops the
-        // MixerDeviceSink which stops playback. No handle to pause mid-flight,
-        // so shutdown-stop is a no-op. Add an explicit stop if pause/resume lands.
-    }
 }

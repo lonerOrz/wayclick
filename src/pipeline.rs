@@ -1,10 +1,12 @@
-//! Pipeline: filter -> map -> execute, with lightweight metrics.
+//! Pipeline: map -> execute, with lightweight metrics.
 //!
-//! `Pipeline` owns the `CompiledConfig` rules, the default sound ids, and the
-//! metrics counters. It pulls `InputEvent`s from a backend stream and drives
-//! them to the audio `engine`. Metrics live HERE so a single counter set covers
-//! the whole flow. The audio engine owns sample decoding, so the pipeline only
-//! deals in `SoundId`s (no `AudioCache` lookups on the hot path).
+//! `Pipeline` owns the compiled rules, the default sound ids, and the counters.
+//! It pulls `InputEvent`s from a backend stream and drives them to the audio
+//! `engine`, which owns sample decoding — the pipeline only deals in `SoundId`s.
+//!
+//! There is no filter stage here: backends drop the events they don't want
+//! (trackpads, auto-repeats) before they reach the stream, so every event the
+//! pipeline sees is one it should act on.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,12 +18,10 @@ use crate::config::CompiledConfig;
 use crate::domain::{Action, CompiledRule, InputEvent, SoundId};
 
 /// Counters for the whole pipeline. `AtomicU64` — no locks, cheap to bump from
-/// many tasks. Read by `check` / a future metrics endpoint.
+/// many tasks. Logged once on shutdown.
 #[derive(Debug, Default)]
 pub struct Metrics {
     pub received: AtomicU64,
-    pub filtered: AtomicU64,
-    pub mapped: AtomicU64,
     pub played: AtomicU64,
 }
 
@@ -31,62 +31,44 @@ pub struct Pipeline {
     default_ids: Vec<SoundId>,
     engine: Arc<dyn AudioEngine>,
     metrics: Arc<Metrics>,
-    enable_trackpads: bool,
 }
 
 impl Pipeline {
-    pub fn new(
-        config: CompiledConfig,
-        engine: Arc<dyn AudioEngine>,
-        enable_trackpads: bool,
-    ) -> Pipeline {
+    pub fn new(config: CompiledConfig, engine: Arc<dyn AudioEngine>) -> Pipeline {
         let default_ids = config.default_ids.clone();
         Pipeline {
             rules: config.rules,
             default_ids,
             engine,
             metrics: Arc::new(Metrics::default()),
-            enable_trackpads,
         }
     }
 
-    #[allow(dead_code)]
+    /// A handle to the pipeline counters, cloned out before the pipeline is
+    /// moved into the runtime.
     pub fn metrics(&self) -> Arc<Metrics> {
         self.metrics.clone()
     }
 
-    /// Drive one event through filter -> map -> execute. Pure (no I/O beyond play).
+    /// Drive one event through map -> execute.
     pub fn handle(&self, event: InputEvent) {
         self.metrics.received.fetch_add(1, Ordering::Relaxed);
 
-        // Filter: trackpads and `Ignored` events are dropped unless enabled.
-        if event == InputEvent::Ignored {
-            self.metrics.filtered.fetch_add(1, Ordering::Relaxed);
-            return;
-        }
-        if !self.enable_trackpads && is_trackpad(event) {
-            self.metrics.filtered.fetch_add(1, Ordering::Relaxed);
-            return;
-        }
-
-        // Map: find the first rule whose trigger matches.
-        if let Some(rule) = self.rules.iter().find(|r| r.trigger == event) {
-            self.metrics.mapped.fetch_add(1, Ordering::Relaxed);
+        // Map: first matching rule wins; otherwise fall back to a random default.
+        if let Some(rule) = self.rules.iter().find(|rule| rule.trigger == event) {
             for action in &rule.actions {
                 let Action::PlaySound(id) = action;
                 self.metrics.played.fetch_add(1, Ordering::Relaxed);
                 self.engine.play(*id);
             }
         } else if !self.default_ids.is_empty() {
-            // No explicit mapping: play a random default.
-            self.metrics.mapped.fetch_add(1, Ordering::Relaxed);
             self.metrics.played.fetch_add(1, Ordering::Relaxed);
             let id = self.default_ids[fastrand(self.default_ids.len())];
             self.engine.play(id);
         }
     }
 
-    /// Consume a backend event stream to completion (or until the stream ends).
+    /// Consume a backend event stream until it ends.
     pub async fn run<S>(&self, stream: S)
     where
         S: futures::Stream<Item = InputEvent> + Unpin,
@@ -98,16 +80,8 @@ impl Pipeline {
     }
 }
 
-/// Heuristic: does this event look like a trackpad? Backends already tag
-/// trackpads by emitting `Ignored`; this is a secondary guard. v1: only
-/// `Ignored` reaches here for trackpads, so this is a no-op fallback kept
-/// intentionally tiny.
-fn is_trackpad(_event: InputEvent) -> bool {
-    false
-}
-
-/// Tiny fast pseudo-random index pick (no external dep surface on Pipeline).
-/// Uses a thread-local `SmallRng` via `rand`.
+/// Pick a random index in `0..n` from a thread-local `SmallRng`, so the pipeline
+/// holds no shared RNG state.
 fn fastrand(n: usize) -> usize {
     use rand::Rng;
     use rand::SeedableRng;
@@ -124,18 +98,17 @@ fn fastrand(n: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::audio::AudioEngine;
     use crate::config::CompiledConfig;
     use crate::domain::{CompiledRule, SoundId};
 
     struct StubEngine {
-        played: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        played: Arc<std::sync::atomic::AtomicUsize>,
     }
+
     impl AudioEngine for StubEngine {
         fn play(&self, _id: SoundId) {
             self.played.fetch_add(1, Ordering::Relaxed);
         }
-        fn stop(&self) {}
     }
 
     fn cfg_with(mappings: Vec<(InputEvent, SoundId)>) -> CompiledConfig {
@@ -143,35 +116,27 @@ mod tests {
             sounds: vec![Some("a.wav".into()), Some("b.wav".into())],
             rules: mappings
                 .into_iter()
-                .map(|(e, id)| CompiledRule::new(e, vec![Action::PlaySound(id)]))
+                .map(|(event, id)| CompiledRule::new(event, vec![Action::PlaySound(id)]))
                 .collect(),
             default_ids: vec![],
         }
     }
 
-    #[test]
-    fn mapped_key_plays() {
-        let played = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    fn stub() -> (Arc<StubEngine>, Arc<std::sync::atomic::AtomicUsize>) {
+        let played = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let engine = Arc::new(StubEngine {
             played: played.clone(),
         });
-        let cfg = cfg_with(vec![(InputEvent::Key(1), SoundId::new(1).unwrap())]);
-        let p = Pipeline::new(cfg, engine, false);
-        p.handle(InputEvent::Key(1));
-        assert_eq!(played.load(Ordering::Relaxed), 1);
-        assert_eq!(p.metrics().played.load(Ordering::Relaxed), 1);
+        (engine, played)
     }
 
     #[test]
-    fn ignored_is_filtered() {
-        let played = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let engine = Arc::new(StubEngine {
-            played: played.clone(),
-        });
-        let cfg = cfg_with(vec![]);
-        let p = Pipeline::new(cfg, engine, false);
-        p.handle(InputEvent::Ignored);
-        assert_eq!(p.metrics().filtered.load(Ordering::Relaxed), 1);
-        assert_eq!(played.load(Ordering::Relaxed), 0);
+    fn mapped_key_plays() {
+        let (engine, played) = stub();
+        let cfg = cfg_with(vec![(InputEvent::Key(1), SoundId::new(1).unwrap())]);
+        let pipeline = Pipeline::new(cfg, engine);
+        pipeline.handle(InputEvent::Key(1));
+        assert_eq!(played.load(Ordering::Relaxed), 1);
+        assert_eq!(pipeline.metrics().played.load(Ordering::Relaxed), 1);
     }
 }
