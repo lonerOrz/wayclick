@@ -28,11 +28,17 @@ const HOTPLUG_INTERVAL: Duration = Duration::from_secs(3);
 /// Linux evdev input backend.
 pub struct EvdevBackend {
     enable_trackpads: bool,
+    /// The runtime the driver task is spawned on. Held explicitly so `events`
+    /// never depends on an ambient runtime context.
+    runtime: tokio::runtime::Handle,
 }
 
 impl EvdevBackend {
-    pub fn new(enable_trackpads: bool) -> Self {
-        EvdevBackend { enable_trackpads }
+    pub fn new(enable_trackpads: bool, runtime: tokio::runtime::Handle) -> Self {
+        EvdevBackend {
+            enable_trackpads,
+            runtime,
+        }
     }
 }
 
@@ -56,7 +62,7 @@ impl InputBackend for EvdevBackend {
 
         let (tx, rx) = mpsc::channel::<InputEvent>(CHANNEL_CAP);
 
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             let known: Arc<Mutex<HashSet<PathBuf>>> = Arc::new(Mutex::new(HashSet::new()));
             let mut tasks: JoinSet<()> = JoinSet::new();
 

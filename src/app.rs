@@ -57,25 +57,21 @@ impl App {
         let pipeline = Pipeline::new(config, engine);
         let metrics = pipeline.metrics();
 
-        let mut backend = for_current_platform(self.enable_trackpads);
-
-        // The runtime must exist *before* `backend.events()`: the Linux backend
-        // calls `tokio::spawn` while building its stream, which panics outside a
-        // runtime context. Enter the runtime so `events()` binds to it, then
-        // drive the pipeline on the same runtime.
+        // Build the runtime first and hand it to the backend: the Linux backend
+        // spawns its driver task on it, so `events()` must not rely on an ambient
+        // runtime context. The pipeline is then driven on the same runtime.
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .expect("tokio runtime");
 
-        let stream = {
-            let _guard = rt.enter();
-            match backend.events() {
-                Ok(stream) => stream,
-                Err(e) => {
-                    tracing::error!(backend = backend.name(), error = %e, "failed to start input backend");
-                    return 1;
-                }
+        let mut backend = for_current_platform(self.enable_trackpads, rt.handle().clone());
+
+        let stream = match backend.events() {
+            Ok(stream) => stream,
+            Err(e) => {
+                tracing::error!(backend = backend.name(), error = %e, "failed to start input backend");
+                return 1;
             }
         };
 

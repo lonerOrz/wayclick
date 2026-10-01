@@ -51,15 +51,21 @@ pub enum BackendError {
 
 /// Construct the backend for the current platform.
 ///
-/// `enable_trackpads` is Linux-only: evdev can tell a trackpad from a keyboard
-/// by name, while the Windows/macOS hooks cannot, so those backends ignore it.
-pub fn for_current_platform(enable_trackpads: bool) -> Box<dyn InputBackend> {
+/// `enable_trackpads` and `runtime` are both Linux-only: evdev can tell a
+/// trackpad from a keyboard by name, and it spawns its driver on the runtime,
+/// while the Windows/macOS hooks do neither (they run on foreign threads).
+/// Handing the runtime in here keeps the "must be inside a runtime" precondition
+/// out of the `InputBackend` interface — a caller cannot forget it.
+pub fn for_current_platform(
+    enable_trackpads: bool,
+    runtime: tokio::runtime::Handle,
+) -> Box<dyn InputBackend> {
     #[cfg(not(target_os = "linux"))]
-    let _ = enable_trackpads;
+    let _ = (enable_trackpads, runtime);
 
     #[cfg(target_os = "linux")]
     {
-        Box::new(evdev_backend::EvdevBackend::new(enable_trackpads))
+        Box::new(evdev_backend::EvdevBackend::new(enable_trackpads, runtime))
     }
     #[cfg(target_os = "windows")]
     {
