@@ -1,9 +1,4 @@
 //! Rodio backend: decode wavs once at startup, mix cloned samples on play.
-//!
-//! Each sound is decoded to an `Arc<[f32]>` plus its own `(channels, sample_rate)`
-//! so the hot path is a cheap `Arc` clone into a `SamplesBuffer` — no file I/O,
-//! no re-decode. The owning `MixerDeviceSink` is held as a field; dropping it
-//! stops all playback, so it must outlive the engine.
 
 use std::io::Cursor;
 use std::num::{NonZeroU16, NonZeroU32};
@@ -18,8 +13,7 @@ use rodio::{ChannelCount, SampleRate};
 use crate::audio::AudioEngine;
 use crate::domain::SoundId;
 
-/// A `rodio::Source` over a shared `Arc<[f32]>` slice. Cloning is O(1) (bumps the
-/// `Arc`); playback never copies the samples off the hot path.
+/// A `rodio::Source` over a shared `Arc<[f32]>`; cloning is O(1).
 #[derive(Clone)]
 struct SharedSamples {
     samples: Arc<[f32]>,
@@ -73,10 +67,8 @@ pub struct DecodedSound {
     pub sample_rate: NonZeroU32,
 }
 
-/// Errors from opening the output or (fatally) having nothing to play.
-///
-/// Per-file decode failures are *not* errors: they log a warning and leave that
-/// slot empty, matching the Python "invalid wav -> skip" behaviour.
+/// Errors from opening the output or having nothing to play. Per-file decode
+/// failures are not errors: they warn and leave that slot empty.
 #[derive(Debug, thiserror::Error)]
 pub enum AudioError {
     #[error("failed to open audio output: {0}")]
@@ -91,7 +83,7 @@ impl From<rodio::stream::DeviceSinkError> for AudioError {
     }
 }
 
-/// A rodio-backed [`AudioEngine`]. `Send + Sync` (mixer handle + immutable data).
+/// A rodio-backed [`AudioEngine`].
 pub struct RodioEngine {
     sink: MixerDeviceSink,
     decoded: Vec<Option<DecodedSound>>,
@@ -99,9 +91,7 @@ pub struct RodioEngine {
 
 impl RodioEngine {
     /// Open the default output and take ownership of the pre-decoded sounds.
-    ///
-    /// `buffer_frames`, if set, requests a fixed cpal buffer size for lower
-    /// latency; `None` uses the device default.
+    /// `buffer_frames` requests a fixed cpal buffer size (`None` = device default).
     pub fn new(
         decoded: Vec<Option<DecodedSound>>,
         buffer_frames: Option<u32>,
@@ -110,9 +100,8 @@ impl RodioEngine {
             return Err(AudioError::NoSounds);
         }
 
-        // A small fixed buffer keeps click→sound latency low (the device default
-        // is often ~100-200ms, which feels laggy). 512 frames ≈ 10ms @48k and is
-        // accepted by every cpal backend we ship on.
+        // A small fixed buffer keeps click->sound latency low (device defaults are
+        // often ~100-200ms). 512 frames ~= 10ms @48k.
         let frames = buffer_frames.unwrap_or(512);
         let sink = rodio::stream::DeviceSinkBuilder::from_default_device()?
             .with_buffer_size(rodio::cpal::BufferSize::Fixed(frames))
@@ -121,11 +110,8 @@ impl RodioEngine {
         Ok(RodioEngine { sink, decoded })
     }
 
-    /// Decode every named wav in `slots` into a [`RodioEngine`].
-    ///
-    /// `slots[i]` is the path for `SoundId(i + 1)` (or `None` for an empty slot).
-    /// A file that is missing or fails to decode logs a warning and becomes an
-    /// empty slot rather than aborting startup.
+    /// Decode every named wav in `slots` (`slots[i]` is `SoundId(i + 1)`). A
+    /// missing or invalid file warns and becomes an empty slot.
     pub fn from_dir(
         dir: &Path,
         slots: &[Option<String>],
@@ -138,10 +124,7 @@ impl RodioEngine {
         RodioEngine::new(decoded, buffer_frames)
     }
 
-    /// Decode every named wav without opening an audio device.
-    ///
-    /// Used by `wayclick check` so the self-test can prove config + wav decoding
-    /// work on a headless machine (no sound card). Returns the decoded slots.
+    /// Decode every named wav without opening an audio device (for `check`).
     pub fn decode_dir(dir: &Path, slots: &[Option<String>]) -> Vec<Option<DecodedSound>> {
         slots
             .iter()
@@ -150,7 +133,7 @@ impl RodioEngine {
     }
 }
 
-/// Read + decode one wav into a [`DecodedSound`]; `None` (with a warning) on any failure.
+/// Read + decode one wav; `None` (with a warning) on any failure.
 fn decode_wav(path: &Path) -> Option<DecodedSound> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
@@ -193,11 +176,5 @@ impl AudioEngine for RodioEngine {
             cursor: 0,
         };
         self.sink.mixer().add(source);
-    }
-
-    fn stop(&self) {
-        // ponytail: the App owns the engine's lifetime; dropping it drops the
-        // MixerDeviceSink which stops playback. No handle to pause mid-flight,
-        // so shutdown-stop is a no-op. Add an explicit stop if pause/resume lands.
     }
 }

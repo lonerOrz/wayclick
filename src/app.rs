@@ -1,22 +1,12 @@
-//! App: owns the audio engine (and its sink), wires the platform backend to the
-//! pipeline, and runs until shutdown.
-//!
-//! Ownership/lifecycle (the rewrite plan's "Ownership" chapter):
-//! - `RodioEngine` (and its `MixerDeviceSink`) is owned by `App` → playback only
-//!   stops when `App` is dropped.
-//! - The backend borrows nothing; it spawns its own tasks and pushes `InputEvent`s
-//!   down an mpsc channel.
-//! - `Pipeline` holds an `Arc<dyn AudioEngine>` (the `RodioEngine`) + the compiled
-//!   config + metrics. The backend stream is consumed by `Pipeline::run`.
-//! - Signal handling (SIGINT/SIGTERM) lives in the backend's own task for Linux;
-//!   `App::run` awaits the stream to completion, which ends when the backend stops.
+//! App: composition root — wires the platform backend to the pipeline.
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use crate::audio::{AudioEngine, RodioEngine};
 use crate::backend::for_current_platform;
-use crate::config::{ConfigSource, FileConfigSource};
+use crate::config::{CompiledConfig, ConfigSource, FileConfigSource};
 use crate::domain::SoundId;
 use crate::pipeline::Pipeline;
 
@@ -35,46 +25,42 @@ impl App {
         }
     }
 
-    /// Load config, build the engine + pipeline, and run the input listener.
-    ///
-    /// Returns the process exit code.
+    /// Run the input listener; returns the process exit code.
     pub fn run(self) -> i32 {
-        let source = FileConfigSource::new(&self.config_dir);
-        let config = match source.load() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!(dir = %self.config_dir.display(), error = %e, "failed to load config");
-                return 1;
-            }
+        let Some(config) = self.load_config() else {
+            return 1;
         };
-        tracing::info!(
-            dir = %self.config_dir.display(),
-            rules = config.rules.len(),
-            sounds = config.sounds.len(),
-            "config loaded"
-        );
 
         let engine = match RodioEngine::from_dir(
             &self.config_dir,
             &config.sounds,
             self.buffer_frames,
         ) {
-            Ok(e) => Arc::new(e) as Arc<dyn AudioEngine>,
+            Ok(engine) => Arc::new(engine) as Arc<dyn AudioEngine>,
             Err(e) => {
                 tracing::error!(error = %e, "failed to start audio engine");
                 eprintln!(
                     "wayclick: cannot open an audio output device. \
-                         Is a sound card / PulseAudio running? (try `wayclick check` for a headless self-test)"
+                     Is a sound card / PulseAudio running? (try `wayclick check` for a headless self-test)"
                 );
                 return 1;
             }
         };
 
-        let pipeline = Arc::new(Pipeline::new(config, engine, self.enable_trackpads));
+        let pipeline = Pipeline::new(config, engine);
+        let metrics = pipeline.metrics();
 
-        let mut backend = for_current_platform(self.enable_trackpads);
+        // Build the runtime first and hand it to the backend: evdev spawns its
+        // driver task on it, so `events()` must not rely on an ambient runtime.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+
+        let mut backend = for_current_platform(self.enable_trackpads, rt.handle().clone());
+
         let stream = match backend.events() {
-            Ok(s) => s,
+            Ok(stream) => stream,
             Err(e) => {
                 tracing::error!(backend = backend.name(), error = %e, "failed to start input backend");
                 return 1;
@@ -82,47 +68,31 @@ impl App {
         };
 
         tracing::info!(backend = backend.name(), "wayclick listening");
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime");
         rt.block_on(async move {
             pipeline.run(stream).await;
         });
 
+        tracing::info!(
+            received = metrics.received.load(Ordering::Relaxed),
+            played = metrics.played.load(Ordering::Relaxed),
+            "shutdown"
+        );
         0
     }
 
-    /// Headless self-check: load config + decode audio, report, exit.
-    ///
-    /// Proves "it really runs" without capturing input or needing root. Decoding
-    /// needs no audio device, so this works on a headless machine.
+    /// Headless self-check: load config + decode audio. Needs no audio device.
     pub fn check(self) -> i32 {
-        let source = FileConfigSource::new(&self.config_dir);
-        let config = match source.load() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!(dir = %self.config_dir.display(), error = %e, "failed to load config");
-                return 1;
-            }
+        let Some(config) = self.load_config() else {
+            return 1;
         };
 
-        // Decode every wav (no audio device required) to prove the asset pack
-        // + decoder path works headlessly.
         let decoded = RodioEngine::decode_dir(&self.config_dir, &config.sounds);
         let total = config.sound_count();
-        let loaded = decoded.iter().filter(|s| s.is_some()).count();
-
+        let loaded = decoded.iter().filter(|slot| slot.is_some()).count();
         let rules = config.rules.len();
         let defaults = config.default_ids.len();
-        tracing::info!(
-            dir = %self.config_dir.display(),
-            sounds = total,
-            sounds.loaded = loaded,
-            rules = rules,
-            defaults = defaults,
-            "config loaded"
-        );
+
+        tracing::info!(loaded, total, rules, defaults, "audio decoded");
         println!("wayclick check:");
         println!("  sounds: {loaded}/{total} decoded");
         println!("  rules:  {rules}");
@@ -137,5 +107,24 @@ impl App {
             }
         }
         0
+    }
+
+    fn load_config(&self) -> Option<CompiledConfig> {
+        let source = FileConfigSource::new(&self.config_dir);
+        match source.load() {
+            Ok(config) => {
+                tracing::info!(
+                    dir = %self.config_dir.display(),
+                    rules = config.rules.len(),
+                    sounds = config.sounds.len(),
+                    "config loaded"
+                );
+                Some(config)
+            }
+            Err(e) => {
+                tracing::error!(dir = %self.config_dir.display(), error = %e, "failed to load config");
+                None
+            }
+        }
     }
 }

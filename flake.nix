@@ -3,6 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -15,6 +16,7 @@
       nixpkgs,
       rust-overlay,
     }:
+
     let
       systems = [
         "x86_64-linux"
@@ -22,131 +24,249 @@
         "aarch64-darwin"
       ];
 
-      perSystem =
+      eachSystem =
+        nixpkgs.lib.genAttrs systems;
+
+
+      mkPkgs =
         system:
+        import nixpkgs {
+          inherit system;
+          overlays = [
+            rust-overlay.overlays.default
+          ];
+        };
+
+
+      mkRust =
+        pkgs:
+
+        pkgs.rust-bin.nightly.latest.default.override {
+          extensions = [
+            "rust-src"
+            "rust-analyzer"
+            "clippy"
+            "rustfmt"
+          ];
+
+          targets = [
+            "x86_64-pc-windows-gnu"
+          ];
+        };
+
+
+      mkDeps =
+        pkgs:
+
         let
-          pkgs = import nixpkgs {
-            inherit system;
-            overlays = [ rust-overlay.overlays.default ];
-          };
+          lib = pkgs.lib;
 
-          rustToolchain = pkgs.rust-bin.nightly.latest.default.override {
-            extensions = [
-              "rust-src"
-              "rust-analyzer"
-              "clippy"
-              "rustfmt"
-            ];
-            targets = [ "x86_64-pc-windows-gnu" ];
-          };
-
-          rustPlatform = pkgs.makeRustPlatform {
-            rustc = rustToolchain;
-            cargo = rustToolchain;
-          };
-
-          linuxNativeLibs = with pkgs; [
+          linuxDeps = with pkgs; [
             pkg-config
             alsa-lib
             udev
             libevdev
           ];
 
-          darwinFrameworks = with pkgs.darwin.apple_sdk.frameworks; [
-            CoreGraphics
-            CoreFoundation
-          ];
+          darwinDeps =
+            with pkgs.darwin.apple_sdk.frameworks; [
+              CoreGraphics
+              CoreFoundation
+            ];
 
-          commonNativeBuildInputs =
-            with pkgs;
-            [ pkg-config ]
-            ++ pkgs.lib.optionals pkgs.stdenv.isLinux linuxNativeLibs
-            ++ pkgs.lib.optionals pkgs.stdenv.isDarwin darwinFrameworks;
+        in
+        {
+          nativeBuildInputs =
+            [
+              pkgs.pkg-config
+            ]
+            ++ lib.optionals pkgs.stdenv.isLinux linuxDeps
+            ++ lib.optionals pkgs.stdenv.isDarwin darwinDeps;
 
-          commonBuildInputs =
-            pkgs.lib.optionals pkgs.stdenv.isLinux linuxNativeLibs
-            ++ pkgs.lib.optionals pkgs.stdenv.isDarwin darwinFrameworks;
 
-          buildWayclick =
-            {
-              pname,
-              doCheck ? true,
-              ...
-            }@args:
-            rustPlatform.buildRustPackage (
-              {
-                inherit pname;
-                version = "0.1.0";
-                src = pkgs.lib.cleanSource ./.;
-                cargoLock.lockFile = ./Cargo.lock;
-                inherit commonNativeBuildInputs commonBuildInputs doCheck;
-              }
-              // args
-            );
+          buildInputs =
+            lib.optionals pkgs.stdenv.isLinux linuxDeps
+            ++ lib.optionals pkgs.stdenv.isDarwin darwinDeps;
+        };
 
-          wayclick = buildWayclick {
-            pname = "wayclick";
-            postInstall = ''
-              mkdir -p $out/share/wayclick
-              cp -r ${./assets/default} $out/share/wayclick/config
-            '';
-            meta = {
-              description = "Low-latency input sound engine";
-              mainProgram = "wayclick";
-            };
-          };
 
-          fmtScript = pkgs.writeShellScriptBin "formatter" ''
-            set -e
-            for arg in "$@"; do
-              if [ -d "$arg" ]; then
-                ${pkgs.nixpkgs-fmt}/bin/nixpkgs-fmt "$arg"
-                ${pkgs.prettier}/bin/prettier --write "$arg"
-                find "$arg" -name "*.rs" -type f -exec ${rustToolchain}/bin/rustfmt {} + || true
-              else
-                case "$arg" in
-                  *.nix) ${pkgs.nixpkgs-fmt}/bin/nixpkgs-fmt "$arg" ;;
-                  *.rs) ${rustToolchain}/bin/rustfmt "$arg" ;;
-                  *.md|*.yaml|*.yml) ${pkgs.prettier}/bin/prettier --write "$arg" ;;
-                esac
-              fi
-            done
+      mkWayclick =
+        {
+          pkgs,
+          rustPlatform,
+        }:
+
+        rustPlatform.buildRustPackage {
+          pname = "wayclick";
+          version = "0.1.0";
+
+          src = nixpkgs.lib.cleanSource ./.;
+
+          cargoLock.lockFile = ./Cargo.lock;
+
+          inherit
+            (mkDeps pkgs)
+            nativeBuildInputs
+            buildInputs;
+
+          doCheck = true;
+
+          postInstall = ''
+            mkdir -p $out/share/wayclick
+            cp -r ${./assets/default} $out/share/wayclick/config
           '';
+
+          meta = {
+            description = "Low-latency input sound engine";
+            mainProgram = "wayclick";
+          };
+        };
+
+
+      mkFormatter =
+        {
+          pkgs,
+          rust,
+        }:
+
+        pkgs.writeShellScriptBin "formatter" ''
+          set -e
+
+          for arg in "$@"; do
+
+            if [ -d "$arg" ]; then
+
+              ${pkgs.nixpkgs-fmt}/bin/nixpkgs-fmt "$arg"
+
+              ${pkgs.prettier}/bin/prettier \
+                --write "$arg"
+
+              find "$arg" \
+                -name "*.rs" \
+                -type f \
+                -exec ${rust}/bin/rustfmt {} + || true
+
+            else
+
+              case "$arg" in
+
+                *.nix)
+                  ${pkgs.nixpkgs-fmt}/bin/nixpkgs-fmt "$arg"
+                  ;;
+
+                *.rs)
+                  ${rust}/bin/rustfmt "$arg"
+                  ;;
+
+                *.md|*.yaml|*.yml)
+                  ${pkgs.prettier}/bin/prettier --write "$arg"
+                  ;;
+
+              esac
+
+            fi
+
+          done
+        '';
+
+
+      perSystem =
+        system:
+
+        let
+          pkgs = mkPkgs system;
+
+          rust = mkRust pkgs;
+
+          rustPlatform =
+            pkgs.makeRustPlatform {
+              cargo = rust;
+              rustc = rust;
+            };
+
+
+          wayclick =
+            mkWayclick {
+              inherit pkgs rustPlatform;
+            };
+
+
+          formatter =
+            mkFormatter {
+              inherit pkgs rust;
+            };
 
         in
         {
           packages.default = wayclick;
 
-          devShells.default = pkgs.mkShell {
-            inputsFrom = [ wayclick ];
 
-            nativeBuildInputs = with pkgs; [
-              rustToolchain
-              zig
-              cargo-zigbuild
-            ];
+          devShells.default =
+            pkgs.mkShell {
 
-            buildInputs = [
-              pkgs.pkgsCross.mingwW64.windows.pthreads
-            ];
+              inputsFrom = [
+                wayclick
+              ];
 
-            env = {
-              CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-L native=${pkgs.pkgsCross.mingwW64.windows.pthreads}/lib";
+
+              nativeBuildInputs =
+                [
+                  rust
+                  pkgs.zig
+                  pkgs.cargo-zigbuild
+                ]
+                ++ (mkDeps pkgs).nativeBuildInputs;
+
+
+              buildInputs =
+                [
+                  pkgs.pkgsCross.mingwW64.windows.pthreads
+                ]
+                ++ (mkDeps pkgs).buildInputs;
+
+
+              env = {
+                CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS =
+                  "-L native=${pkgs.pkgsCross.mingwW64.windows.pthreads}/lib";
+              };
             };
-          };
+
 
           apps.default = {
             type = "app";
             program = "${wayclick}/bin/wayclick";
           };
 
-          formatter = fmtScript;
+
+          inherit formatter;
         };
+
+
+      systemOutputs =
+        eachSystem perSystem;
+
+
+      mapSystemOutput =
+        name:
+
+        eachSystem (
+          system:
+            systemOutputs.${system}.${name}
+        );
+
+
     in
     {
-      packages = nixpkgs.lib.genAttrs systems (s: (perSystem s).packages);
-      devShells = nixpkgs.lib.genAttrs systems (s: (perSystem s).devShells);
-      apps = nixpkgs.lib.genAttrs systems (s: (perSystem s).apps);
-      formatter = nixpkgs.lib.genAttrs systems (s: (perSystem s).formatter);
+      packages =
+        mapSystemOutput "packages";
+
+      devShells =
+        mapSystemOutput "devShells";
+
+      apps =
+        mapSystemOutput "apps";
+
+      formatter =
+        mapSystemOutput "formatter";
     };
 }
