@@ -95,6 +95,9 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-latest
             os: linux
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            os: linux
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
             os: windows
@@ -155,6 +158,11 @@ jobs:
             runner: ubuntu-latest
             os: linux
             arch: x86_64
+            bin_ext: ""
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            os: linux
+            arch: aarch64
             bin_ext: ""
           - target: x86_64-pc-windows-msvc
             runner: windows-latest

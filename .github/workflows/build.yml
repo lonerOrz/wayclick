@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       build-linux:
-        description: "Build Linux x86_64 on ubuntu-latest."
+        description: "Build Linux x86_64 on ubuntu-latest and aarch64 on ubuntu-24.04-arm."
         type: boolean
         default: true
       build-windows:
@@ -64,6 +64,7 @@ jobs:
           # Use native runners; cross-compile only where GitHub offers no hosted runner.
           if [[ "${BUILD_LINUX}" == "true" ]]; then
             add '{"target":"x86_64-unknown-linux-gnu","runner":"ubuntu-latest","os":"linux","bin_ext":""}'
+            add '{"target":"aarch64-unknown-linux-gnu","runner":"ubuntu-24.04-arm","os":"linux","bin_ext":""}'
           fi
           if [[ "${BUILD_WINDOWS}" == "true" ]]; then
             add '{"target":"x86_64-pc-windows-msvc","runner":"windows-latest","os":"windows","bin_ext":".exe"}'
@@ -131,12 +132,17 @@ jobs:
           path: pkg/${{ matrix.os }}-${{ matrix.target }}
           if-no-files-found: error
 
-  # Nix build and flake check. CI validation only; not a release artifact.
+  # Nix build and flake check for both Linux architectures. CI validation
+  # only; not a release artifact.
   nix:
-    name: Nix build & check
+    name: Nix build & check (${{ matrix.system }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        system: [x86_64-linux, aarch64-linux]
     steps:
       - uses: actions/checkout@v7
 
@@ -146,19 +152,19 @@ jobs:
           github_access_token: ${{ github.token }}
 
       - name: Build package
-        run: nix -L build .#packages.x86_64-linux.default
+        run: nix -L build .#packages.${{ matrix.system }}.default
 
       - name: Flake check
         run: nix -L flake check
 
       - name: Upload artifact
         if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
-        run: cp -L result/bin/wayclick wayclick-linux
+        run: cp -L result/bin/wayclick wayclick-${{ matrix.system }}
 
       - name: Store artifact
         if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: wayclick-nix-linux
-          path: wayclick-linux
+          name: wayclick-nix-${{ matrix.system }}
+          path: wayclick-${{ matrix.system }}
           if-no-files-found: error
