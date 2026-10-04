@@ -74,7 +74,11 @@ jobs:
             add '{"target":"aarch64-apple-darwin","runner":"macos-latest","os":"macos","bin_ext":""}'
           fi
 
-          echo "include=${include}" >> "$GITHUB_OUTPUT"
+          {
+            echo "include<<EOF"
+            echo "${include}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
           echo "Resolved matrix: ${include}"
 
   build:
