@@ -1,0 +1,289 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: ["Cargo.toml"]
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: "Re-publish an existing release for the same commit. The tag never moves."
+        required: false
+        type: boolean
+        default: false
+      verbose:
+        description: "Enable verbose cargo build output."
+        required: false
+        type: boolean
+        default: false
+
+# Least privilege by default; the release job widens where required.
+permissions:
+  contents: read
+
+# Pinned for reproducible builds across all jobs.
+env:
+  RUST_VERSION: "1.99.0"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Resolve the version, gate the pipeline, and enforce the trust boundary:
+  # releases run only from the main branch.
+  prepare:
+    name: Prepare release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      should_release: ${{ steps.gate.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Read version from Cargo.toml
+        id: version
+        shell: bash
+        run: |
+          version="$(cargo metadata --no-deps --format-version 1 --manifest-path Cargo.toml | jq -r '.packages[0].version')"
+          if [[ -z "${version}" || "${version}" == "null" ]]; then
+            echo "::error::Could not parse version from Cargo.toml"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "Detected version: ${version}"
+
+      - name: Decide whether to release
+        id: gate
+        shell: bash
+        env:
+          FORCE: ${{ inputs.force_release }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if git show-ref --tags --verify --quiet "refs/tags/v${VERSION}"; then
+            echo "::notice::Tag v${VERSION} already exists."
+            echo "should_release=${FORCE:-false}" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Quality gate inside the same DAG so release cannot skip CI.
+  # Covers every shipped target.
+  verify:
+    name: Verify (${{ matrix.target }})
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            os: linux
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            os: windows
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            os: windows
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            os: macos
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            os: macos
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libevdev-dev pkg-config
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.target }}
+          components: clippy, rustfmt
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: verify-${{ matrix.target }}
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+  # Build the release binary for every supported target and stage it with its
+  # bundled assets. Add a target by appending to `matrix.include`.
+  build:
+    name: Build (${{ matrix.target }})
+    needs: [prepare, verify]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            os: linux
+            arch: x86_64
+            bin_ext: ""
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            os: windows
+            arch: x86_64
+            bin_ext: ".exe"
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            os: windows
+            arch: aarch64
+            bin_ext: ".exe"
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+            os: macos
+            arch: x86_64
+            bin_ext: ""
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            os: macos
+            arch: aarch64
+            bin_ext: ""
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libevdev-dev pkg-config
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: build-${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} ${{ inputs.verbose == true && '--verbose' || '' }}
+
+      - name: Stage release artifact
+        shell: bash
+        run: |
+          staging="pkg/${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "${staging}/assets"
+          cp "target/${{ matrix.target }}/release/wayclick${{ matrix.bin_ext }}" "${staging}/"
+          cp -r assets/default "${staging}/assets/default"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: wayclick-${{ matrix.os }}-${{ matrix.arch }}
+          path: pkg/${{ matrix.os }}-${{ matrix.arch }}
+          if-no-files-found: error
+
+  # Create the git tag and publish one release with every platform archive,
+  # a SHA256SUMS file, and build provenance attestations.
+  release:
+    name: Publish release
+    needs: [prepare, verify, build]
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ./dist
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          version="${{ needs.prepare.outputs.version }}"
+          mkdir -p release-assets
+          shopt -s nullglob
+          for dir in dist/wayclick-*/; do
+            base="$(basename "${dir}")"
+            slug="${base#wayclick-}"
+            tar -C "${dir}" -czf "release-assets/wayclick-v${version}-${slug}.tar.gz" .
+          done
+          ( cd release-assets && sha256sum -- * > SHA256SUMS )
+          ls -lh release-assets
+
+      - name: Create and push release tag
+        shell: bash
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          FORCE: ${{ inputs.force_release }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git show-ref --tags --verify --quiet "refs/tags/${TAG}"; then
+            tag_sha="$(git rev-list -n1 "refs/tags/${TAG}")"
+            if [[ "${tag_sha}" != "${GITHUB_SHA}" ]]; then
+              echo "::error::${TAG} already exists and points to ${tag_sha}, not ${GITHUB_SHA}."
+              echo "::error::Tags are immutable; force_release may only re-publish the release for the same commit."
+              exit 1
+            fi
+            echo "Tag ${TAG} already exists at HEAD; re-publishing release only."
+          else
+            git tag -a "${TAG}" -m "Release ${TAG}"
+            git push origin "${TAG}"
+            echo "Created and pushed tag ${TAG}."
+          fi
+
+      - name: Attest release assets
+        uses: actions/attest@v4
+        with:
+          subject-path: release-assets/*
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.tag }}
+          generate_release_notes: true
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

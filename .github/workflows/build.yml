@@ -6,112 +6,155 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
-      build-ubuntu:
-        description: "Build for Linux (ubuntu-latest)"
+      build-linux:
+        description: "Build Linux x86_64 on ubuntu-latest."
         type: boolean
         default: true
       build-windows:
-        description: "Build for Windows (windows-latest)"
+        description: "Build Windows x86_64 on windows-latest and aarch64 on windows-11-arm."
         type: boolean
         default: true
       build-macos:
-        description: "Build for macOS (macos-latest)"
+        description: "Build macOS x86_64 on macos-15-intel and aarch64 on macos-latest."
         type: boolean
         default: true
       upload-artifacts:
-        description: "Upload release binaries as workflow artifacts"
+        description: "Upload release binaries as workflow artifacts."
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
+env:
+  RUST_VERSION: "1.99.0"
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  cargo-ubuntu:
-    name: build (ubuntu-latest)
+  # Turn dispatch inputs into the cargo build matrix.
+  matrix:
+    name: Resolve build matrix
     runs-on: ubuntu-latest
-    if: github.event_name != 'workflow_dispatch' || inputs.build-ubuntu
+    permissions:
+      contents: read
+    outputs:
+      include: ${{ steps.resolve.outputs.include }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Install Linux system deps
+      - name: Resolve matrix from inputs
+        id: resolve
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BUILD_LINUX: ${{ inputs.build-linux }}
+          BUILD_WINDOWS: ${{ inputs.build-windows }}
+          BUILD_MACOS: ${{ inputs.build-macos }}
+        run: |
+          if [[ "${EVENT}" != "workflow_dispatch" ]]; then
+            BUILD_LINUX=true
+            BUILD_WINDOWS=true
+            BUILD_MACOS=true
+          fi
+
+          include='[]'
+          add() { include="$(echo "${include}" | jq --argjson item "$1" '. + [$item]')"; }
+
+          # Use native runners; cross-compile only where GitHub offers no hosted runner.
+          if [[ "${BUILD_LINUX}" == "true" ]]; then
+            add '{"target":"x86_64-unknown-linux-gnu","runner":"ubuntu-latest","os":"linux","bin_ext":""}'
+          fi
+          if [[ "${BUILD_WINDOWS}" == "true" ]]; then
+            add '{"target":"x86_64-pc-windows-msvc","runner":"windows-latest","os":"windows","bin_ext":".exe"}'
+            add '{"target":"aarch64-pc-windows-msvc","runner":"windows-11-arm","os":"windows","bin_ext":".exe"}'
+          fi
+          if [[ "${BUILD_MACOS}" == "true" ]]; then
+            add '{"target":"x86_64-apple-darwin","runner":"macos-15-intel","os":"macos","bin_ext":""}'
+            add '{"target":"aarch64-apple-darwin","runner":"macos-latest","os":"macos","bin_ext":""}'
+          fi
+
+          echo "include=${include}" >> "$GITHUB_OUTPUT"
+          echo "Resolved matrix: ${include}"
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: matrix
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.matrix.outputs.include) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev libevdev-dev pkg-config
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release
-      - name: Bundle default assets next to the binary
-        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
-        run: |
-          mkdir -p target/release/assets
-          cp -r assets/default target/release/assets/default
-      - uses: actions/upload-artifact@v4
-        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
-        with:
-          name: wayclick-ubuntu-latest
-          path: |
-            target/release/wayclick
-            target/release/assets/default
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libudev-dev libevdev-dev pkg-config
 
-  cargo-windows:
-    name: build (windows-latest)
-    runs-on: windows-latest
-    if: github.event_name != 'workflow_dispatch' || inputs.build-windows
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release
-      - name: Bundle default assets next to the binary
-        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Stage artifact
         shell: bash
         run: |
-          mkdir -p target/release/assets
-          cp -r assets/default target/release/assets/default
-      - uses: actions/upload-artifact@v4
-        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
-        with:
-          name: wayclick-windows-latest
-          path: |
-            target/release/wayclick.exe
-            target/release/assets/default
+          staging="pkg/${{ matrix.os }}-${{ matrix.target }}"
+          mkdir -p "${staging}/assets"
+          cp "target/${{ matrix.target }}/release/wayclick${{ matrix.bin_ext }}" "${staging}/"
+          cp -r assets/default "${staging}/assets/default"
 
-  cargo-macos:
-    name: build (macos-latest)
-    runs-on: macos-latest
-    if: github.event_name != 'workflow_dispatch' || inputs.build-macos
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release
-      - name: Bundle default assets next to the binary
+      - name: Upload artifact
         if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
-        run: |
-          mkdir -p target/release/assets
-          cp -r assets/default target/release/assets/default
-      - uses: actions/upload-artifact@v4
-        if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
+        uses: actions/upload-artifact@v7
         with:
-          name: wayclick-macos-latest
-          path: |
-            target/release/wayclick
-            target/release/assets/default
+          name: wayclick-${{ matrix.os }}-${{ matrix.target }}
+          path: pkg/${{ matrix.os }}-${{ matrix.target }}
+          if-no-files-found: error
 
+  # Nix build and flake check. CI validation only; not a release artifact.
   nix:
-    name: nix build
+    name: Nix build & check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v27
+      - uses: actions/checkout@v7
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
         with:
-          extra_nix_config: |
-            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
-      - run: nix -L build .#packages.x86_64-linux.default
-      - run: nix -L flake check
+          github_access_token: ${{ github.token }}
+
+      - name: Build package
+        run: nix -L build .#packages.x86_64-linux.default
+
+      - name: Flake check
+        run: nix -L flake check
 
       - name: Upload artifact
         if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
         run: cp -L result/bin/wayclick wayclick-linux
-      - uses: actions/upload-artifact@v4
+
+      - name: Store artifact
         if: github.event_name == 'workflow_dispatch' && inputs.upload-artifacts
+        uses: actions/upload-artifact@v7
         with:
           name: wayclick-nix-linux
           path: wayclick-linux
+          if-no-files-found: error
