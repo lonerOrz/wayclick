@@ -81,11 +81,19 @@ impl Pipeline {
         Arc::clone(&self.metrics)
     }
 
-    /// Swap in a new routing snapshot. In-flight events keep their old snapshot;
-    /// subsequent events use the new one. The audio engine is unchanged, so any
-    /// newly referenced sound must already be loaded in the engine's bank. The
-    /// old snapshot is reclaimed only once its last reader drops its `Arc`.
-    pub fn replace_snapshot(&self, snapshot: Arc<RuntimeSnapshot>) {
+    /// Swap in a new routing snapshot and optionally a rebuilt engine.
+    ///
+    /// In-flight events keep their old snapshot/engine; subsequent events use
+    /// the new ones. The old snapshot and engine are reclaimed once their last
+    /// user drops them — sounds still playing finish naturally.
+    pub fn replace_snapshot(
+        &self,
+        snapshot: Arc<RuntimeSnapshot>,
+        engine: Option<Arc<dyn AudioEngine>>,
+    ) {
+        if let Some(engine) = engine {
+            self.executor.replace_engine(engine);
+        }
         if let Ok(mut guard) = self.snapshot.write() {
             *guard = snapshot;
         }
@@ -323,7 +331,7 @@ mod tests {
         let snapshot = Arc::new(
             RuntimeSnapshot::new(vec![rule(b, 1)], vec![], DefaultPolicy::Ignore).unwrap(),
         );
-        pipeline.replace_snapshot(snapshot);
+        pipeline.replace_snapshot(snapshot, None);
         engine.played.lock().unwrap().clear();
 
         pipeline.handle(b);
@@ -364,7 +372,7 @@ mod tests {
                 )
                 .unwrap(),
             );
-            pipeline.replace_snapshot(snapshot);
+            pipeline.replace_snapshot(snapshot, None);
         }
         stop.store(true, Ordering::Relaxed);
         for handle in handles {

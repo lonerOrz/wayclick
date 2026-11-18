@@ -1,6 +1,6 @@
 //! App: composition root — wires the platform backend to the pipeline.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -78,32 +78,30 @@ impl App {
         }
     }
 
-    /// Resolve each compiled sound path against the search directories.
-    ///
-    /// Absolute paths pass through untouched; relative paths return the first
-    /// existing match, falling back to the config-dir join (so decode errors
-    /// name a sensible path instead of silently vanishing).
-    fn resolve_sound_paths(&self, config: &CompiledConfig) -> Vec<Option<String>> {
-        resolve_sound_paths(&self.sound_dirs, config)
-    }
-
     /// Run the input listener until a shutdown signal or the stream ends.
     ///
     /// Shutdown order: signal → request backend stop → drain the stream (the
     /// worker closes it on exit) → join the worker. This order works on all
     /// platforms.
     pub fn run(self) -> Result<(), AppError> {
-        let (config, warnings) = self.load_config()?;
+        let Self {
+            config_dir,
+            sound_dirs,
+            enable_trackpads,
+            buffer,
+            device,
+        } = self;
+        let (config, warnings) = Self::load_config_for(&config_dir)?;
         for warning in &warnings {
             tracing::warn!("config diagnostic: {warning}");
         }
 
-        let sound_paths = self.resolve_sound_paths(&config);
+        let sound_paths = resolve_sound_paths(&sound_dirs, &config);
         let engine = RodioEngine::from_paths(
-            &self.config_dir,
+            &config_dir,
             &sound_paths,
-            self.buffer,
-            self.device,
+            buffer,
+            device.clone(),
             config.volume(),
             config.max_voices as usize,
         )?;
@@ -118,7 +116,7 @@ impl App {
             .enable_all()
             .build()?;
 
-        let mut backend = for_current_platform(self.enable_trackpads, rt.handle().clone());
+        let mut backend = for_current_platform(enable_trackpads, rt.handle().clone());
         let backend_name = backend.name();
         let mut session = backend.events().map_err(|e| {
             tracing::error!(backend = backend_name, error = %e, "failed to start input backend");
@@ -137,9 +135,11 @@ impl App {
             // Hot reload: poll the config file's mtime and swap the routing
             // snapshot when it changes.
             spawn_config_watcher(
-                self.config_dir.clone(),
-                self.sound_dirs.clone(),
+                config_dir,
+                sound_dirs,
                 sound_paths,
+                buffer,
+                device.clone(),
                 Arc::clone(&pipeline),
             );
 
@@ -188,10 +188,15 @@ impl App {
 
     /// Headless self-check: load config + decode audio. Needs no audio device.
     pub fn check(self) -> Result<(), AppError> {
-        let (config, warnings) = self.load_config()?;
+        let Self {
+            config_dir,
+            sound_dirs,
+            ..
+        } = self;
+        let (config, warnings) = Self::load_config_for(&config_dir)?;
 
-        let paths = self.resolve_sound_paths(&config);
-        let bank = RodioEngine::decode_bank(&self.config_dir, &paths);
+        let paths = resolve_sound_paths(&sound_dirs, &config);
+        let bank = RodioEngine::decode_bank(&config_dir, &paths);
         let total = config.sound_count();
         let loaded = config
             .catalog
@@ -231,8 +236,10 @@ impl App {
     /// Errors are rejected inside the loader. Display of warnings is left to
     /// the caller: `run` logs them via tracing, `check` prints them in its
     /// human-readable report.
-    fn load_config(&self) -> Result<(CompiledConfig, Vec<ConfigDiagnostic>), AppError> {
-        let source = FileConfigSource::new(&self.config_dir);
+    fn load_config_for(
+        config_dir: &Path,
+    ) -> Result<(CompiledConfig, Vec<ConfigDiagnostic>), AppError> {
+        let source = FileConfigSource::new(config_dir);
         let (config, validated) = source.load_with_diagnostics()?;
         let warnings: Vec<ConfigDiagnostic> = validated
             .diagnostics
@@ -241,7 +248,7 @@ impl App {
             .cloned()
             .collect();
         tracing::info!(
-            dir = %self.config_dir.display(),
+            dir = %config_dir.display(),
             rules = config.rules.len(),
             sounds = config.sound_count(),
             warnings = warnings.len(),
@@ -279,18 +286,20 @@ fn resolve_sound_paths(sound_dirs: &[PathBuf], config: &CompiledConfig) -> Vec<O
         .collect()
 }
 
-/// Poll `config.json` for changes and swap the pipeline's routing snapshot.
+/// Poll `config.json` for changes and swap the pipeline's snapshot.
 ///
-/// Reload only applies when the sound catalog is unchanged: the audio engine
-/// keeps the bank decoded at startup, and `SoundId`s are bank positions, so a
-/// config that adds, removes, or reorders sounds would shift every id and
-/// trigger wrong sounds. Such reloads are rejected with a restart hint.
-/// Routing-only changes (keys, defaults, policy, mappings to existing sounds)
-/// apply immediately.
+/// Any successful reload applies immediately:
+/// - Routing-only changes swap the snapshot alone.
+/// - A changed sound catalog rebuilds the audio engine (new bank) and swaps
+///   both; in-flight sounds finish on the old engine, which is reclaimed once
+///   done. If the rebuilt engine cannot open the device, the reload keeps the
+///   previous snapshot+engine rather than going silent.
 fn spawn_config_watcher(
     config_dir: PathBuf,
     sound_dirs: Vec<PathBuf>,
-    sound_paths: Vec<Option<String>>,
+    startup_sound_paths: Vec<Option<String>>,
+    buffer: AudioBufferSize,
+    device: AudioDevice,
     pipeline: Arc<Pipeline>,
 ) {
     tokio::spawn(async move {
@@ -310,22 +319,44 @@ fn spawn_config_watcher(
                             tracing::warn!("config reload diagnostic: {d}");
                         }
                     }
-                    // Compare the *resolved* sound paths: identical catalogs
-                    // mean identical SoundId assignment.
-                    let new_paths = resolve_sound_paths(&sound_dirs, &config);
-                    if new_paths != sound_paths {
-                        tracing::warn!(
-                            "config reload skipped: sound set changed (restart to load new sounds)"
+                    let sound_paths = resolve_sound_paths(&sound_dirs, &config);
+                    let snapshot = Arc::new(RuntimeSnapshot::from_config(&config));
+                    // SoundIds are bank positions: only a changed catalog needs
+                    // a rebuilt bank; routing-only edits swap the snapshot alone.
+                    if sound_paths == startup_sound_paths {
+                        pipeline.replace_snapshot(snapshot, None);
+                        tracing::info!(
+                            rules = config.rules.len(),
+                            "config reloaded (routing only)"
                         );
                         continue;
                     }
-                    let snapshot = Arc::new(RuntimeSnapshot::from_config(&config));
-                    pipeline.replace_snapshot(snapshot);
-                    tracing::info!(
-                        rules = config.rules.len(),
-                        sounds = config.sound_count(),
-                        "config reloaded"
+                    let engine = rebuild_engine(
+                        &config_dir,
+                        &sound_paths,
+                        buffer,
+                        &device,
+                        config.volume(),
+                        config.max_voices as usize,
                     );
+                    match engine {
+                        Ok(engine) => {
+                            pipeline.replace_snapshot(snapshot, Some(engine));
+                            tracing::info!(
+                                rules = config.rules.len(),
+                                sounds = config.sound_count(),
+                                "config reloaded (sound set changed; engine rebuilt)"
+                            );
+                        }
+                        Err(e) => {
+                            // Keep the old snapshot+engine rather than go
+                            // silent: the device may be temporarily gone.
+                            tracing::warn!(
+                                error = %e,
+                                "config reload kept previous config: engine rebuild failed"
+                            );
+                        }
+                    }
                 }
                 Err(e) => {
                     // Keep the old snapshot: a broken edit must not stop playback.
@@ -334,6 +365,29 @@ fn spawn_config_watcher(
             }
         }
     });
+}
+
+/// Decode the resolved sound paths and open a fresh engine.
+///
+/// Package the old construction steps so startup and hot-reload share one
+/// code path and cannot drift.
+fn rebuild_engine(
+    config_dir: &Path,
+    sound_paths: &[Option<String>],
+    buffer: AudioBufferSize,
+    device: &AudioDevice,
+    volume: f32,
+    max_voices: usize,
+) -> Result<Arc<dyn AudioEngine>, AudioError> {
+    let engine = RodioEngine::from_paths(
+        config_dir,
+        sound_paths,
+        buffer,
+        device.clone(),
+        volume,
+        max_voices,
+    )?;
+    Ok(Arc::new(engine) as Arc<dyn AudioEngine>)
 }
 
 /// Wait for SIGINT or SIGTERM.
@@ -374,9 +428,9 @@ mod tests {
     use super::*;
     use crate::config::from_str;
 
-    /// The hot-reload guard: a config whose sound set differs from the engine's
-    /// startup catalog must be detected as changed, because SoundIds are bank
-    /// positions and would silently shift onto wrong sounds.
+    /// The hot-reload decision: `resolve_sound_paths` detects a changed sound
+    /// catalog, which now triggers an engine rebuild instead of a rejection.
+    /// Routing-only changes keep the catalog and swap the snapshot alone.
     #[test]
     fn sound_set_change_is_detectable() {
         let dirs = vec![PathBuf::from("assets/default")];

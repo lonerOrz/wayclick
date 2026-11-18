@@ -80,15 +80,12 @@ fn sound_search_dirs(config_dir: &Path) -> Vec<PathBuf> {
 }
 
 fn resolve_config_dir() -> PathBuf {
-    let user = user_config_dir();
-    if let Some(user) = &user
-        && user.join("config.json").is_file()
-    {
-        return user.clone();
-    }
-    bundled_config_dir()
-        .or(user)
-        .unwrap_or_else(|| PathBuf::from("config"))
+    // The user's own config directory is always the runtime config: the
+    // bundled dir only supplies sound files. First run materialises the
+    // embedded default there (see `ensure_user_config`), so the user always
+    // has a complete, editable copy instead of silently overriding one key
+    // into a fork of nothing.
+    user_config_dir().unwrap_or_else(|| PathBuf::from("config"))
 }
 
 /// Refuse to run as root; device access is decided by the actual open, not by
@@ -116,15 +113,15 @@ fn main() -> ExitCode {
 
     let cli = Cli::parse();
 
-    // Explicit --config-dir: materialise the embedded default config there if
-    // the user has none, so the directory is always editable.
-    if let Some(dir) = &cli.config_dir
-        && let Err(e) = config::ensure_user_config(dir)
-    {
-        tracing::warn!(error = %e, dir = %dir.display(), "could not create default config");
+    // Always materialise the embedded default config into the runtime config
+    // dir when the user has none — explicit --config-dir or the platform
+    // default alike — so every user gets a complete, editable copy on first
+    // run instead of running off an untouchable bundled file.
+    let config_dir = cli.config_dir.clone().unwrap_or_else(resolve_config_dir);
+    if let Err(e) = config::ensure_user_config(&config_dir) {
+        tracing::warn!(error = %e, dir = %config_dir.display(), "could not create default config");
     }
 
-    let config_dir = cli.config_dir.clone().unwrap_or_else(resolve_config_dir);
     let sound_dirs = sound_search_dirs(&config_dir);
     let app = app::App::new(
         config_dir,
