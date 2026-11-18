@@ -1,0 +1,5 @@
+[toolchain]
+# Matches CI's pinned RUST_VERSION (build/check/release workflows).
+channel = "1.99.0"
+components = ["rustfmt", "clippy", "rust-analyzer"]
+profile = "default"
