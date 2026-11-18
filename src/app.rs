@@ -84,30 +84,7 @@ impl App {
     /// existing match, falling back to the config-dir join (so decode errors
     /// name a sensible path instead of silently vanishing).
     fn resolve_sound_paths(&self, config: &CompiledConfig) -> Vec<Option<String>> {
-        config
-            .catalog
-            .iter()
-            .map(|(_, spec)| {
-                let path = spec.path();
-                if path.is_absolute() {
-                    return Some(path.display().to_string());
-                }
-                for dir in &self.sound_dirs {
-                    let candidate = dir.join(path);
-                    if candidate.exists() {
-                        // Absolute so downstream `config_dir.join(path)` in the
-                        // decoder passes the path through untouched.
-                        let absolute = std::fs::canonicalize(&candidate).unwrap_or_else(|_| {
-                            std::path::absolute(&candidate).unwrap_or(candidate)
-                        });
-                        return Some(absolute.display().to_string());
-                    }
-                }
-                // Not found anywhere: keep the config-dir join so the decoder
-                // reports the intended location.
-                Some(self.config_dir.join(path).display().to_string())
-            })
-            .collect()
+        resolve_sound_paths(&self.sound_dirs, config)
     }
 
     /// Run the input listener until a shutdown signal or the stream ends.
@@ -159,7 +136,12 @@ impl App {
 
             // Hot reload: poll the config file's mtime and swap the routing
             // snapshot when it changes.
-            spawn_config_watcher(self.config_dir.clone(), Arc::clone(&pipeline));
+            spawn_config_watcher(
+                self.config_dir.clone(),
+                self.sound_dirs.clone(),
+                sound_paths,
+                Arc::clone(&pipeline),
+            );
 
             let mut stream = stream;
             // `Some` keeps the select branch live; a completed oneshot polled
@@ -269,12 +251,48 @@ impl App {
     }
 }
 
+/// Free-standing path resolution so the hot-reload watcher can compare the
+/// new config's sound catalog against the engine's startup catalog.
+fn resolve_sound_paths(sound_dirs: &[PathBuf], config: &CompiledConfig) -> Vec<Option<String>> {
+    config
+        .catalog
+        .iter()
+        .map(|(_, spec)| {
+            let path = spec.path();
+            if path.is_absolute() {
+                return Some(path.display().to_string());
+            }
+            for dir in sound_dirs {
+                let candidate = dir.join(path);
+                if candidate.exists() {
+                    // Absolute so downstream `config_dir.join(path)` in the
+                    // decoder passes the path through untouched.
+                    let absolute = std::fs::canonicalize(&candidate)
+                        .unwrap_or_else(|_| std::path::absolute(&candidate).unwrap_or(candidate));
+                    return Some(absolute.display().to_string());
+                }
+            }
+            // Not found anywhere: keep the config-dir join so the decoder
+            // reports the intended location.
+            Some(sound_dirs[0].join(path).display().to_string())
+        })
+        .collect()
+}
+
 /// Poll `config.json` for changes and swap the pipeline's routing snapshot.
 ///
-/// Reload is conservative: the audio engine is not rebuilt, so a config that
-/// introduces sound files not already loaded is applied for routing only; the
-/// new sound slots resolve to "not loaded" until a restart.
-fn spawn_config_watcher(config_dir: PathBuf, pipeline: Arc<Pipeline>) {
+/// Reload only applies when the sound catalog is unchanged: the audio engine
+/// keeps the bank decoded at startup, and `SoundId`s are bank positions, so a
+/// config that adds, removes, or reorders sounds would shift every id and
+/// trigger wrong sounds. Such reloads are rejected with a restart hint.
+/// Routing-only changes (keys, defaults, policy, mappings to existing sounds)
+/// apply immediately.
+fn spawn_config_watcher(
+    config_dir: PathBuf,
+    sound_dirs: Vec<PathBuf>,
+    sound_paths: Vec<Option<String>>,
+    pipeline: Arc<Pipeline>,
+) {
     tokio::spawn(async move {
         let source = FileConfigSource::new(&config_dir);
         let mut last_mtime = source.last_modified();
@@ -291,6 +309,15 @@ fn spawn_config_watcher(config_dir: PathBuf, pipeline: Arc<Pipeline>) {
                         if d.severity == crate::config::diagnostic::DiagnosticSeverity::Warning {
                             tracing::warn!("config reload diagnostic: {d}");
                         }
+                    }
+                    // Compare the *resolved* sound paths: identical catalogs
+                    // mean identical SoundId assignment.
+                    let new_paths = resolve_sound_paths(&sound_dirs, &config);
+                    if new_paths != sound_paths {
+                        tracing::warn!(
+                            "config reload skipped: sound set changed (restart to load new sounds)"
+                        );
+                        continue;
                     }
                     let snapshot = Arc::new(RuntimeSnapshot::from_config(&config));
                     pipeline.replace_snapshot(snapshot);
@@ -339,5 +366,53 @@ async fn wait_for_shutdown_signal() {
 async fn wait_for_shutdown_signal() {
     if tokio::signal::ctrl_c().await.is_ok() {
         tracing::info!("Ctrl+C received");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::from_str;
+
+    /// The hot-reload guard: a config whose sound set differs from the engine's
+    /// startup catalog must be detected as changed, because SoundIds are bank
+    /// positions and would silently shift onto wrong sounds.
+    #[test]
+    fn sound_set_change_is_detectable() {
+        let dirs = vec![PathBuf::from("assets/default")];
+        let before =
+            from_str(r#"{"defaults":["key1.wav","key3.wav"],"mappings":{"30":"key1.wav"}}"#)
+                .unwrap();
+        let after_reordered =
+            from_str(r#"{"defaults":["key3.wav","key1.wav"],"mappings":{"30":"key1.wav"}}"#)
+                .unwrap();
+        let after_added =
+            from_str(r#"{"defaults":["key1.wav","key3.wav"],"mappings":{"30":"key2.wav"}}"#)
+                .unwrap();
+
+        let baseline = resolve_sound_paths(&dirs, &before);
+        // These files exist in assets/default, so resolution succeeds.
+        assert!(baseline.iter().all(|p| p.is_some()));
+
+        assert_ne!(
+            resolve_sound_paths(&dirs, &after_reordered),
+            baseline,
+            "reordering defaults changes SoundId assignment and must be detected"
+        );
+        assert_ne!(
+            resolve_sound_paths(&dirs, &after_added),
+            baseline,
+            "a different sound sequence changes SoundId assignment and must be detected"
+        );
+
+        // Same sound sequence, different routing: must NOT be flagged.
+        let rerouted =
+            from_str(r#"{"defaults":["key1.wav","key3.wav"],"mappings":{"31":"key1.wav"}}"#)
+                .unwrap();
+        assert_eq!(
+            resolve_sound_paths(&dirs, &rerouted),
+            baseline,
+            "routing-only changes keep the catalog and are safe to hot-reload"
+        );
     }
 }
