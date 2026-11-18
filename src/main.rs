@@ -1,13 +1,14 @@
 //! wayclick CLI. `run` (default) starts the listener; `check` is a headless
 //! self-test that decodes audio without touching the input devices.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
 
 use wayclick::app;
+use wayclick::config;
 
 #[derive(Parser)]
 #[command(name = "wayclick", version, about = "Low-latency input sound engine")]
@@ -49,9 +50,9 @@ fn user_config_dir() -> Option<PathBuf> {
     Some(dirs.config_dir().to_path_buf())
 }
 
-/// Locate the bundled default config dir (dev `assets/default`, then the
-/// nix-installed `share/wayclick/config` next to the executable).
-fn default_config_dir() -> Option<PathBuf> {
+/// Locate a bundled config dir with sound files (dev `assets/default`, then
+/// the nix-installed `share/wayclick/config` next to the executable).
+fn bundled_config_dir() -> Option<PathBuf> {
     let mut candidates = vec![PathBuf::from("assets/default")];
     if let Some(dir) = std::env::current_exe()
         .ok()
@@ -65,6 +66,19 @@ fn default_config_dir() -> Option<PathBuf> {
         .find(|c| c.join("config.json").is_file())
 }
 
+/// Directories to search for sound files named by relative config paths:
+/// the config directory first, then the bundled dir (so a user config in the
+/// platform config dir can still reference the packaged default sounds).
+fn sound_search_dirs(config_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![config_dir.to_path_buf()];
+    if let Some(bundled) = bundled_config_dir()
+        && bundled != config_dir
+    {
+        dirs.push(bundled);
+    }
+    dirs
+}
+
 fn resolve_config_dir() -> PathBuf {
     let user = user_config_dir();
     if let Some(user) = &user
@@ -72,7 +86,7 @@ fn resolve_config_dir() -> PathBuf {
     {
         return user.clone();
     }
-    default_config_dir()
+    bundled_config_dir()
         .or(user)
         .unwrap_or_else(|| PathBuf::from("config"))
 }
@@ -101,9 +115,20 @@ fn main() -> ExitCode {
         .init();
 
     let cli = Cli::parse();
+
+    // Explicit --config-dir: materialise the embedded default config there if
+    // the user has none, so the directory is always editable.
+    if let Some(dir) = &cli.config_dir
+        && let Err(e) = config::ensure_user_config(dir)
+    {
+        tracing::warn!(error = %e, dir = %dir.display(), "could not create default config");
+    }
+
     let config_dir = cli.config_dir.clone().unwrap_or_else(resolve_config_dir);
+    let sound_dirs = sound_search_dirs(&config_dir);
     let app = app::App::new(
         config_dir,
+        sound_dirs,
         cli.enable_trackpads,
         cli.buffer_frames,
         cli.audio_device,

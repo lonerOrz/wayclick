@@ -38,6 +38,9 @@ pub enum AppError {
 
 pub struct App {
     config_dir: PathBuf,
+    /// Directories searched for relative sound paths (config dir first, then
+    /// the bundled dir).
+    sound_dirs: Vec<PathBuf>,
     enable_trackpads: bool,
     buffer: AudioBufferSize,
     device: AudioDevice,
@@ -46,6 +49,7 @@ pub struct App {
 impl App {
     pub fn new(
         config_dir: PathBuf,
+        sound_dirs: Vec<PathBuf>,
         enable_trackpads: bool,
         buffer_frames: Option<u32>,
         audio_device: Option<String>,
@@ -67,10 +71,43 @@ impl App {
         };
         App {
             config_dir,
+            sound_dirs,
             enable_trackpads,
             buffer,
             device,
         }
+    }
+
+    /// Resolve each compiled sound path against the search directories.
+    ///
+    /// Absolute paths pass through untouched; relative paths return the first
+    /// existing match, falling back to the config-dir join (so decode errors
+    /// name a sensible path instead of silently vanishing).
+    fn resolve_sound_paths(&self, config: &CompiledConfig) -> Vec<Option<String>> {
+        config
+            .catalog
+            .iter()
+            .map(|(_, spec)| {
+                let path = spec.path();
+                if path.is_absolute() {
+                    return Some(path.display().to_string());
+                }
+                for dir in &self.sound_dirs {
+                    let candidate = dir.join(path);
+                    if candidate.exists() {
+                        // Absolute so downstream `config_dir.join(path)` in the
+                        // decoder passes the path through untouched.
+                        let absolute = std::fs::canonicalize(&candidate).unwrap_or_else(|_| {
+                            std::path::absolute(&candidate).unwrap_or(candidate)
+                        });
+                        return Some(absolute.display().to_string());
+                    }
+                }
+                // Not found anywhere: keep the config-dir join so the decoder
+                // reports the intended location.
+                Some(self.config_dir.join(path).display().to_string())
+            })
+            .collect()
     }
 
     /// Run the input listener until a shutdown signal or the stream ends.
@@ -84,11 +121,7 @@ impl App {
             tracing::warn!("config diagnostic: {warning}");
         }
 
-        let sound_paths: Vec<Option<String>> = config
-            .catalog
-            .iter()
-            .map(|(_, spec)| Some(spec.path().display().to_string()))
-            .collect();
+        let sound_paths = self.resolve_sound_paths(&config);
         let engine = RodioEngine::from_paths(
             &self.config_dir,
             &sound_paths,
@@ -175,11 +208,7 @@ impl App {
     pub fn check(self) -> Result<(), AppError> {
         let (config, warnings) = self.load_config()?;
 
-        let paths: Vec<Option<String>> = config
-            .catalog
-            .iter()
-            .map(|(_, spec)| Some(spec.path().display().to_string()))
-            .collect();
+        let paths = self.resolve_sound_paths(&config);
         let bank = RodioEngine::decode_bank(&self.config_dir, &paths);
         let total = config.sound_count();
         let loaded = config
