@@ -4,9 +4,9 @@
 //! unwinds the guard and disables/frees the tap.
 
 use std::cell::Cell;
+use std::ffi::c_void;
 use std::time::Duration;
 
-use futures::stream::BoxStream;
 use objc2_core_foundation::{
     CFMachPort, CFRetained, CFRunLoop, CFRunLoopSource, kCFRunLoopDefaultMode,
 };
@@ -140,13 +140,14 @@ struct TapGuard {
 
 impl Drop for TapGuard {
     fn drop(&mut self) {
-        // SAFETY: port/source/loop are valid and owned by this guard; must be
-        // dropped on the thread that created them (this guard never leaves it).
-        unsafe {
-            CGEvent::tap_enable(&self.port, false);
-        }
-        self.loop_ref
-            .remove_source(Some(&self.source), kCFRunLoopDefaultMode);
+        // `tap_enable` and `remove_source` are safe objc2 wrappers; only the
+        // extern static needs an unsafe block. All three must run on the
+        // thread that created the guard (this guard never leaves it).
+        CGEvent::tap_enable(&self.port, false);
+        // SAFETY: `kCFRunLoopDefaultMode` is a valid constant for the process
+        // lifetime.
+        let mode = unsafe { kCFRunLoopDefaultMode };
+        self.loop_ref.remove_source(Some(&self.source), mode);
     }
 }
 
@@ -167,48 +168,53 @@ impl RunLoopStopper {
 /// Create the tap on the run-loop thread, report the outcome, then block in the
 /// run loop until the session stops it.
 fn run_tap(ready: bridge::Ready) {
-    // SAFETY: the FFI calls below follow objc2's contracts.
-    unsafe {
-        let Some(port) = CGEvent::tap_create(
+    // SAFETY: `tap_create` requires the caller to uphold CGEventTap's FFI
+    // contract (valid callback, live run loop); the callback never unwinds.
+    let port = unsafe {
+        CGEvent::tap_create(
             CGEventTapLocation::SessionEventTap,
             CGEventTapPlacement::HeadInsertEventTap,
             CGEventTapOptions::ListenOnly,
             event_mask(),
             Some(tap_callback),
             std::ptr::null_mut(),
-        ) else {
-            ready.fail(BackendError::Permission);
-            return;
-        };
+        )
+    };
+    let Some(port) = port else {
+        ready.fail(BackendError::Permission);
+        return;
+    };
 
-        let Some(source) = CFMachPort::new_run_loop_source(None, Some(&port), 0) else {
-            ready.fail(BackendError::Start(
-                "failed to create run-loop source for event tap".into(),
-            ));
-            return;
-        };
-        let Some(loop_ref) = CFRunLoop::current() else {
-            ready.fail(BackendError::Start("no current run loop".into()));
-            return;
-        };
+    let Some(source) = CFMachPort::new_run_loop_source(None, Some(&port), 0) else {
+        ready.fail(BackendError::Start(
+            "failed to create run-loop source for event tap".into(),
+        ));
+        return;
+    };
+    let Some(loop_ref) = CFRunLoop::current() else {
+        ready.fail(BackendError::Start("no current run loop".into()));
+        return;
+    };
 
-        loop_ref.add_source(Some(&source), kCFRunLoopDefaultMode);
-        CGEvent::tap_enable(&port, true);
+    // SAFETY: `kCFRunLoopDefaultMode` is a valid constant for the process
+    // lifetime.
+    let mode = unsafe { kCFRunLoopDefaultMode };
+    loop_ref.add_source(Some(&source), mode);
+    CGEvent::tap_enable(&port, true);
 
-        let guard = TapGuard {
-            port,
-            source,
-            loop_ref: CFRetained::clone(&loop_ref),
-        };
+    let guard = TapGuard {
+        port,
+        source,
+        loop_ref: CFRetained::clone(&loop_ref),
+    };
 
-        let stopper = RunLoopStopper(CFRetained::as_ptr(&loop_ref).as_ptr());
-        bridge::register_stop(Box::new(move || stopper.stop()));
+    let stopper = RunLoopStopper(CFRetained::as_ptr(&loop_ref).as_ptr());
+    bridge::register_stop(Box::new(move || stopper.stop()));
 
-        ready.ok();
-        tracing::info!("macOS CGEventTap installed");
+    ready.ok();
+    tracing::info!("macOS CGEventTap installed");
 
-        CFRunLoop::run();
-        drop(guard);
-        tracing::info!("macOS event tap run loop exited");
-    }
+    CFRunLoop::run();
+    drop(guard);
+    tracing::info!("macOS event tap run loop exited");
 }

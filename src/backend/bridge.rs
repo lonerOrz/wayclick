@@ -227,9 +227,7 @@ pub(crate) fn start_bridged(
     install: impl FnOnce(Ready) + Send + 'static,
 ) -> Result<BridgedStart, BackendError> {
     let (tx, rx) = mpsc::channel::<InputEvent>(CHANNEL_CAP);
-    if let Err(err) = try_start_sender(tx) {
-        return Err(err);
-    }
+    try_start_sender(tx)?;
 
     let (ready_tx, ready_rx) = std_mpsc::channel::<Result<(), BackendError>>();
 
