@@ -27,7 +27,6 @@ pub enum ConfigCode {
     DuplicateTrigger,
     InvalidSoundPath,
     InvalidMouseButton,
-    UnsupportedVersion,
     InvalidDefaultPolicy,
     InvalidVolume,
     InvalidMaxVoices,
@@ -42,7 +41,6 @@ impl fmt::Display for ConfigCode {
             Self::DuplicateTrigger => "duplicate_trigger",
             Self::InvalidSoundPath => "invalid_sound_path",
             Self::InvalidMouseButton => "invalid_mouse_button",
-            Self::UnsupportedVersion => "unsupported_version",
             Self::InvalidDefaultPolicy => "invalid_default_policy",
             Self::InvalidVolume => "invalid_volume",
             Self::InvalidMaxVoices => "invalid_max_voices",
@@ -56,7 +54,6 @@ impl fmt::Display for ConfigCode {
 pub enum ConfigLocation {
     Defaults,
     Mapping(String),
-    Version,
     Root,
 }
 
@@ -65,7 +62,6 @@ impl fmt::Display for ConfigLocation {
         match self {
             Self::Defaults => write!(f, "defaults"),
             Self::Mapping(key) => write!(f, "mapping \"{key}\""),
-            Self::Version => write!(f, "version"),
             Self::Root => write!(f, "root"),
         }
     }

@@ -11,7 +11,6 @@ pub enum ConfigError {
     Json(serde_json::Error),
     Empty,
     TooManySounds(usize),
-    UnsupportedVersion(u32),
     InvalidSoundPath(String),
     DuplicateTrigger(String),
     /// One or more structured diagnostics rejected the config.
@@ -37,11 +36,6 @@ impl fmt::Display for ConfigError {
             Self::Json(e) => write!(f, "invalid JSON in config: {e}"),
             Self::Empty => write!(f, "config has no usable sounds"),
             Self::TooManySounds(n) => write!(f, "too many sounds: {n} (max {})", u32::MAX - 1),
-            Self::UnsupportedVersion(v) => write!(
-                f,
-                "unsupported config version: {v} (max {})",
-                crate::config::CURRENT_VERSION
-            ),
             Self::InvalidSoundPath(p) => write!(f, "invalid sound path: {p}"),
             Self::DuplicateTrigger(k) => write!(f, "duplicate trigger: {k}"),
             Self::Diagnostics(diagnostics) => {

@@ -31,7 +31,6 @@ wayclick                    # run the listener
 
 ```json
 {
-  "version": 1,
   "default_policy": "random",
   "volume": 1.0,
   "max_voices": 32,
