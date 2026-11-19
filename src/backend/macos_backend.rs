@@ -78,9 +78,7 @@ unsafe fn map_event(event_type: CGEventType, event: *const CGEvent) -> Option<In
         CGEventType::FlagsChanged => LAST_FLAGS.with(|last| {
             let code =
                 CGEvent::integer_value_field(Some(ev), CGEventField::KeyboardEventKeycode) as u16;
-            let Some(flag) = modifier_flag_for_key(code) else {
-                return None;
-            };
+            let flag = modifier_flag_for_key(code)?;
             let flags = CGEvent::flags(Some(ev));
             let prev = last.replace(flags);
             // CapsLock is a toggle: every state change is one physical press.

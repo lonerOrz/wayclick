@@ -94,8 +94,11 @@ fn fmt_cell(code: Option<&u32>) -> String {
 
 #[test]
 fn readme_key_table_matches_translators() {
+    // Normalise line endings: a Windows checkout with core.autocrlf produces
+    // CRLF, which would otherwise fail the comparison while looking identical.
     let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md"))
-        .expect("README.md must exist (the key table is verified against it)");
+        .expect("README.md must exist (the key table is verified against it)")
+        .replace("\r\n", "\n");
 
     let start = "<!-- key-table:start -->";
     let end = "<!-- key-table:end -->";
