@@ -1,13 +1,13 @@
 //! Event routing: `InputEvent` → action, with O(1) average lookup.
 
-use std::collections::HashMap;
+use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::domain::{Action, CompiledRule, InputEvent, SoundId};
 
 /// Immutable rule index; defaults are the fallback for unmatched events.
 #[derive(Debug, Clone)]
 pub struct Router {
-    routes: HashMap<InputEvent, Action>,
+    routes: FxHashMap<InputEvent, Action>,
     defaults: Box<[SoundId]>,
 }
 
@@ -15,7 +15,7 @@ impl Router {
     /// Build a router; returns `Err` with the duplicate event if two rules
     /// share a trigger.
     pub fn new(rules: Vec<CompiledRule>, defaults: Vec<SoundId>) -> Result<Self, InputEvent> {
-        let mut routes = HashMap::with_capacity(rules.len());
+        let mut routes = FxHashMap::with_capacity_and_hasher(rules.len(), FxBuildHasher);
         for rule in rules {
             if routes.insert(rule.trigger(), rule.action()).is_some() {
                 return Err(rule.trigger());

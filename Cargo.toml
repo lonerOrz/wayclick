@@ -46,6 +46,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Random selection
 rand = { version = "0.8", features = ["small_rng"] }
 
+# Fast hashing for the config-built, read-only route table
+rustc-hash = "2"
+
 # CLI
 clap = { version = "4", features = ["derive"] }
 
