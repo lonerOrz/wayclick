@@ -1,6 +1,6 @@
 [package]
 name = "wayclick"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 description = "A lightweight cross-platform CLI application for triggering sound effects with keyboard and mouse input."
 readme = "README.md"
