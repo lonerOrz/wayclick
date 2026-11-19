@@ -343,27 +343,35 @@ mod tests {
 
     #[test]
     fn snapshot_swap_is_safe_under_concurrent_dispatch() {
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Barrier;
+
+        const READERS: usize = 4;
+        const ITERATIONS: usize = 500;
+        const SWAPS: usize = 200;
 
         let engine = Arc::new(FakeAudioEngine::new(false));
         let a = InputEvent::KeyDown(PhysicalKey::A);
         let b = InputEvent::KeyDown(PhysicalKey::B);
         let pipeline = Arc::new(Pipeline::new(cfg(vec![rule(a, 0)], vec![]), engine));
 
-        let stop = Arc::new(AtomicBool::new(false));
+        // Readers run a fixed number of dispatches rather than until a stop
+        // flag, so the expected event count is exact and the test cannot pass
+        // or fail depending on thread scheduling.
+        let start = Arc::new(Barrier::new(READERS + 1));
         let mut handles = Vec::new();
-        // Readers hammer dispatch while a writer swaps snapshots repeatedly.
-        for _ in 0..4 {
+        for _ in 0..READERS {
             let pipeline = Arc::clone(&pipeline);
-            let stop = Arc::clone(&stop);
+            let start = Arc::clone(&start);
             handles.push(std::thread::spawn(move || {
-                while !stop.load(Ordering::Relaxed) {
+                start.wait();
+                for _ in 0..ITERATIONS {
                     pipeline.handle(a);
                     pipeline.handle(b);
                 }
             }));
         }
-        for i in 0..200 {
+        start.wait();
+        for i in 0..SWAPS {
             let snapshot = Arc::new(
                 RuntimeSnapshot::new(
                     vec![if i % 2 == 0 { rule(a, 0) } else { rule(b, 1) }],
@@ -374,11 +382,12 @@ mod tests {
             );
             pipeline.replace_snapshot(snapshot, None);
         }
-        stop.store(true, Ordering::Relaxed);
         for handle in handles {
             handle.join().unwrap();
         }
-        // Every dispatched event was counted; no panics or torn snapshots.
-        assert!(pipeline.metrics().snapshot().received_events > 0);
+        // Exactly one received event per handle call: no lost events, no
+        // double counts, and no panic from a torn snapshot.
+        let expected = (READERS * ITERATIONS * 2) as u64;
+        assert_eq!(pipeline.metrics().snapshot().received_events, expected);
     }
 }
