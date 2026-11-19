@@ -6,8 +6,13 @@
 /// buffer, so the audible latency is roughly `2 × frames / sample_rate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioBufferSize {
-    /// Ask the device for the smallest period it advertises. This is the
-    /// lowest-latency choice and the one `--buffer-frames 0` selects.
+    /// Automatically select a conservative low-latency period.
+    ///
+    /// Prefer 256 frames, clamped to the default output device's advertised
+    /// period range. If the range is unknown, use Rodio's safe default.
+    Auto,
+    /// Request the smallest advertised period, with a 64-frame safety floor.
+    /// This is what `--buffer-frames 0` selects.
     ///
     /// Unlike [`Self::DeviceDefault`], it bypasses the library's ~50 ms
     /// "safe" default, which would add tens of milliseconds of delay.
@@ -55,10 +60,6 @@ impl AudioDevice {
         }
     }
 }
-
-/// The default used when no explicit buffer was requested: 512 frames ≈
-/// 10.67 ms at 48 kHz — a buffer size, not an end-to-end latency figure.
-pub const DEFAULT_BUFFER_FRAMES: u32 = 512;
 
 #[cfg(test)]
 mod tests {

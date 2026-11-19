@@ -2,7 +2,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
@@ -10,7 +10,6 @@ use rodio::source::Source;
 use rodio::stream::MixerDeviceSink;
 use rodio::{ChannelCount, SampleRate};
 
-use crate::audio::buffer::DEFAULT_BUFFER_FRAMES;
 use crate::audio::decoder;
 use crate::audio::rodio::source::SharedSamples;
 use crate::audio::{AudioBufferSize, AudioDevice, AudioEngine, AudioError, SoundBank};
@@ -21,7 +20,9 @@ pub const MAX_VOICES: usize = 32;
 
 /// A rodio-backed [`AudioEngine`].
 pub struct RodioEngine {
+    /// Owns the output stream and mixer.
     sink: MixerDeviceSink,
+    /// Decoded PCM sound bank.
     bank: SoundBank,
     /// Voices currently queued or playing; capped at `max_voices`.
     voices: Arc<AtomicUsize>,
@@ -83,23 +84,13 @@ impl<S: Source> Source for VoiceGuard<S> {
     }
 }
 
-/// Log a stream error without panicking. The device layer may recover on its
-/// own (e.g. after a device re-plug); if it does not, subsequent `play` calls
-/// fail and are reported by the pipeline's rate-limited logger.
-fn log_stream_error(err: rodio::cpal::StreamError) {
-    tracing::error!(error = %err, "audio output stream error");
-}
-
 impl RodioEngine {
     /// Open an output device and take ownership of the decoded sounds.
     ///
     /// The device is chosen by [`AudioDevice`]; a named device falls back to
-    /// the default when no match is found. The builder is retried with the
-    /// device's other supported configs if the requested buffer size is
-    /// rejected, so a bad buffer choice never leaves the app silent.
-    ///
-    /// [`AudioBufferSize::LowLatency`] asks the device for the smallest period
-    /// it advertises, bypassing the library's ~50 ms safe default.
+    /// the default when no match is found. The buffer mode selects either an
+    /// automatic device-clamped period, the lowest safe period, the device
+    /// default, or an explicit frame count.
     pub fn new(
         bank: SoundBank,
         buffer: AudioBufferSize,
@@ -112,18 +103,29 @@ impl RodioEngine {
         }
 
         let device_handle = select_device(&device)?;
-        let builder = rodio::stream::DeviceSinkBuilder::from_device(device_handle.clone())?;
+        let period_range = default_period_range(&device_handle);
+
+        let builder = rodio::stream::DeviceSinkBuilder::from_device(device_handle)?;
         let builder = match buffer {
-            AudioBufferSize::LowLatency => match min_supported_period(&device_handle) {
+            AudioBufferSize::Auto => match choose_auto_period(period_range) {
                 Some(frames) => {
-                    let frames = low_latency_period(frames);
-                    tracing::info!(frames, "requesting minimum device period for low latency");
+                    tracing::info!(frames, "automatically selected audio period");
                     builder.with_buffer_size(rodio::cpal::BufferSize::Fixed(frames))
                 }
                 None => {
                     tracing::warn!(
-                        "device does not report a supported buffer range; using its default"
+                        "cannot determine supported period range; using Rodio safe default"
                     );
+                    builder
+                }
+            },
+            AudioBufferSize::LowLatency => match choose_low_latency_period(period_range) {
+                Some(frames) => {
+                    tracing::info!(frames, "requesting lowest safe device period");
+                    builder.with_buffer_size(rodio::cpal::BufferSize::Fixed(frames))
+                }
+                None => {
+                    tracing::warn!("no usable low-latency period; using Rodio safe default");
                     builder
                 }
             },
@@ -132,10 +134,28 @@ impl RodioEngine {
                 builder.with_buffer_size(rodio::cpal::BufferSize::Fixed(frames.get()))
             }
         };
+
+        // Log each distinct terminal error once. CPAL 0.18 already recovers
+        // from ALSA polling errors via underrun recovery instead of looping;
+        // this flag only suppresses duplicate log lines for repeated reports.
+        let reported = Arc::new(AtomicBool::new(false));
         let mut sink = builder
-            .with_error_callback(log_stream_error)
+            .with_error_callback({
+                let reported = Arc::clone(&reported);
+                move |err: rodio::CpalError| {
+                    if !reported.swap(true, Ordering::Relaxed) {
+                        tracing::error!(
+                            error = %err,
+                            kind = ?err.kind(),
+                            "audio output stream error"
+                        );
+                    }
+                }
+            })
             .open_sink_or_fallback()?;
         sink.log_on_drop(false);
+
+        tracing::info!(config = ?sink.config(), "audio output initialized");
 
         Ok(Self {
             sink,
@@ -147,9 +167,6 @@ impl RodioEngine {
     }
 
     /// Decode every named sound and build an engine.
-    ///
-    /// A missing or invalid file warns and leaves an empty slot; if all slots
-    /// are empty, [`AudioError::NoSounds`] is returned.
     pub fn from_paths(
         dir: &Path,
         paths: &[Option<String>],
@@ -181,11 +198,28 @@ impl RodioEngine {
     }
 }
 
+impl AudioEngine for RodioEngine {
+    fn play(&self, id: SoundId) -> Result<(), AudioError> {
+        let sound = self.bank.get(id).ok_or(AudioError::SoundNotLoaded(id))?;
+
+        if !reserve_voice(&self.voices, self.max_voices) {
+            return Err(AudioError::TooManyVoices(self.max_voices));
+        }
+
+        let source = SharedSamples::new(
+            sound.shared_samples(),
+            sound.channels(),
+            sound.sample_rate(),
+        );
+        let source = source.amplify(self.volume);
+        self.sink
+            .mixer()
+            .add(VoiceGuard::new(source, Arc::clone(&self.voices)));
+        Ok(())
+    }
+}
+
 /// Resolve the requested device to a concrete cpal device.
-///
-/// A named device is matched (case-insensitively) against each output device's
-/// description; if none matches, the default device is used and a warning is
-/// logged so the user knows the selection did not take effect.
 fn select_device(device: &AudioDevice) -> Result<rodio::cpal::Device, AudioError> {
     let host = rodio::cpal::default_host();
     match device {
@@ -216,30 +250,38 @@ fn select_device(device: &AudioDevice) -> Result<rodio::cpal::Device, AudioError
     }
 }
 
-/// The smallest period (in frames) the device advertises, if it reports a
-/// range. Returns `None` when the backend cannot say before opening a stream.
-fn min_supported_period(device: &rodio::cpal::Device) -> Option<u32> {
-    let configs = device.supported_output_configs().ok()?;
-    let mut min = u32::MAX;
-    for config in configs {
-        if let rodio::cpal::SupportedBufferSize::Range { min: lo, .. } = *config.buffer_size() {
-            min = min.min(lo);
-        }
+/// Read the buffer-size range for the device's actual default output config.
+fn default_period_range(device: &rodio::cpal::Device) -> Option<(u32, u32)> {
+    let config = device.default_output_config().ok()?;
+    match *config.buffer_size() {
+        rodio::cpal::SupportedBufferSize::Range { min, max } => Some((min, max)),
+        _ => None,
     }
-    (min != u32::MAX).then_some(min)
 }
 
-/// Lower bound for the low-latency period, in frames.
-///
-/// ALSA happily reports a 1-frame minimum, which no real workload can
-/// sustain: the callback would underrun on the first scheduling hiccup.
-/// 64 frames (1.33 ms at 48 kHz) is the lowest value the latency guidance
-/// recommends; below it the audible gain is nil and clicks are guaranteed.
+/// Initial automatic target: 5.33 ms per period at 48 kHz.
+const AUTO_TARGET_PERIOD: u32 = 256;
+
+/// Do not blindly use pathological hardware minima.
 const LOW_LATENCY_MIN_PERIOD: u32 = 64;
 
-/// Clamp the device's advertised minimum to a sustainable floor.
-fn low_latency_period(device_min: u32) -> u32 {
-    device_min.max(LOW_LATENCY_MIN_PERIOD)
+/// Select a conservative period within the supported range.
+fn choose_auto_period(range: Option<(u32, u32)>) -> Option<u32> {
+    let (min, max) = range?;
+    if min > max {
+        return None;
+    }
+    Some(AUTO_TARGET_PERIOD.clamp(min, max))
+}
+
+/// Select the lowest period that respects our safety floor.
+fn choose_low_latency_period(range: Option<(u32, u32)>) -> Option<u32> {
+    let (min, max) = range?;
+    if min > max {
+        return None;
+    }
+    let frames = min.max(LOW_LATENCY_MIN_PERIOD);
+    (frames <= max).then_some(frames)
 }
 
 /// Reserve a voice slot (`false` at the cap); the CAS loop makes
@@ -262,34 +304,9 @@ fn reserve_voice(voices: &AtomicUsize, cap: usize) -> bool {
     }
 }
 
-#[must_use]
+/// Default buffer mode: automatic, device-clamped period selection.
 pub fn default_buffer() -> AudioBufferSize {
-    AudioBufferSize::Fixed(
-        crate::audio::buffer::BufferFrames::new(DEFAULT_BUFFER_FRAMES)
-            .expect("DEFAULT_BUFFER_FRAMES is non-zero"),
-    )
-}
-
-impl AudioEngine for RodioEngine {
-    fn play(&self, id: SoundId) -> Result<(), AudioError> {
-        let sound = self.bank.get(id).ok_or(AudioError::SoundNotLoaded(id))?;
-
-        if !reserve_voice(&self.voices, self.max_voices) {
-            return Err(AudioError::TooManyVoices(self.max_voices));
-        }
-
-        let source = SharedSamples::new(
-            sound.shared_samples(),
-            sound.channels(),
-            sound.sample_rate(),
-        );
-        // Per-voice gain applied via the Source trait.
-        let source = source.amplify(self.volume);
-        self.sink
-            .mixer()
-            .add(VoiceGuard::new(source, Arc::clone(&self.voices)));
-        Ok(())
-    }
+    AudioBufferSize::Auto
 }
 
 #[cfg(test)]
@@ -351,12 +368,29 @@ mod tests {
     }
 
     #[test]
+    fn auto_period_prefers_256_frames() {
+        assert_eq!(choose_auto_period(Some((64, 1024))), Some(256));
+    }
+
+    #[test]
+    fn auto_period_respects_device_minimum() {
+        assert_eq!(choose_auto_period(Some((512, 2048))), Some(512));
+    }
+
+    #[test]
+    fn auto_period_respects_device_maximum() {
+        assert_eq!(choose_auto_period(Some((64, 128))), Some(128));
+    }
+
+    #[test]
+    fn auto_period_handles_unknown_range() {
+        assert_eq!(choose_auto_period(None), None);
+    }
+
+    #[test]
     fn low_latency_period_has_a_sustainable_floor() {
-        // ALSA reports a 1-frame minimum; never request it.
-        assert_eq!(low_latency_period(1), LOW_LATENCY_MIN_PERIOD);
-        assert_eq!(low_latency_period(0), LOW_LATENCY_MIN_PERIOD);
-        // A device whose real minimum is above the floor is respected.
-        assert_eq!(low_latency_period(256), 256);
-        assert_eq!(low_latency_period(LOW_LATENCY_MIN_PERIOD), 64);
+        assert_eq!(choose_low_latency_period(Some((1, 1024))), Some(64));
+        assert_eq!(choose_low_latency_period(Some((256, 1024))), Some(256));
+        assert_eq!(choose_low_latency_period(Some((1, 32))), None);
     }
 }

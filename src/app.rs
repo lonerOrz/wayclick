@@ -54,10 +54,10 @@ impl App {
         buffer_frames: Option<u32>,
         audio_device: Option<String>,
     ) -> App {
-        // CLI semantics: None keeps the historical fixed 512-frame default;
-        // `Some(0)` asks for the device's smallest period (lowest latency,
-        // bypassing the library's ~50 ms safe default); any other value fixes
-        // that many frames.
+        // CLI semantics:
+        // None    = automatically select a device-compatible period.
+        // Some(0) = request the lowest safe advertised period.
+        // Some(N) = request exactly N frames.
         let buffer = match buffer_frames {
             None => default_buffer(),
             Some(0) => AudioBufferSize::LowLatency,

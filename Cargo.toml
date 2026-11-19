@@ -28,7 +28,7 @@ tokio-stream = "0.1"
 
 # Audio playback and decoding
 rodio = {
-    version = "0.22",
+    version = "0.23.0",
     default-features = false,
     features = ["playback", "hound"],
 }
