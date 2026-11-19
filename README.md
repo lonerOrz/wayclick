@@ -196,8 +196,8 @@ Windows (`win:` + X-button ids), and `0`–`4` button numbers on macOS.
 
 ## Latency
 
-The event path (kernel → router → mixer submit) costs about **0.1 µs**;
-end-to-end latency is dominated by the audio buffer:
+The event path (kernel → router → mixer submit) costs about **0.06 µs** by
+default; end-to-end latency is dominated by the audio buffer:
 
 | `--buffer-frames` | Period | Audible latency (48 kHz, 2-period ring) |
 | ---: | ---: | ---: |
@@ -207,6 +207,10 @@ end-to-end latency is dominated by the audio buffer:
 | `128` | 2.67 ms | ~5.3 ms |
 | `256` | 5.33 ms | ~10.7 ms |
 | `512` | 10.67 ms | ~21 ms |
+
+Build with `--features latency-metrics` to record per-event dispatch latency
+and print p50/p95/p99 at shutdown. This adds two clock reads per event
+(~0.04 µs), so it is off by default.
 
 Lower periods raise the risk of buffer underruns (clicks) on a loaded
 system. Auto is a device-capability-driven initial choice: it targets 256

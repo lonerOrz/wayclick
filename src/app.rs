@@ -173,15 +173,23 @@ impl App {
         rt.block_on(session.shutdown()).map_err(AppError::Input)?;
 
         let snapshot = metrics.snapshot();
-        let latency = snapshot.dispatch_latency;
+        #[cfg(feature = "latency-metrics")]
         tracing::info!(
             received = snapshot.received_events,
             matched = snapshot.matched_events,
             play_requests = snapshot.play_requests,
             failed_plays = snapshot.failed_plays,
-            dispatch_p50_ns = latency.percentile_bound(50),
-            dispatch_p95_ns = latency.percentile_bound(95),
-            dispatch_p99_ns = latency.percentile_bound(99),
+            dispatch_p50_ns = snapshot.dispatch_latency.percentile_bound(50),
+            dispatch_p95_ns = snapshot.dispatch_latency.percentile_bound(95),
+            dispatch_p99_ns = snapshot.dispatch_latency.percentile_bound(99),
+            "shutdown"
+        );
+        #[cfg(not(feature = "latency-metrics"))]
+        tracing::info!(
+            received = snapshot.received_events,
+            matched = snapshot.matched_events,
+            play_requests = snapshot.play_requests,
+            failed_plays = snapshot.failed_plays,
             "shutdown"
         );
         Ok(())

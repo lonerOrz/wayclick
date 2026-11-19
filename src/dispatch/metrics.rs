@@ -29,10 +29,14 @@ impl Metrics {
         self.failed_plays.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Record the time spent dispatching one event (route → execute), in
-    /// nanoseconds. Called once per handled event from the hot path.
+    /// Record dispatch latency when the `latency-metrics` feature is on.
+    /// No-op otherwise, so callers can stay unconditional on the hot path.
+    #[inline]
     pub fn record_dispatch_latency(&self, nanos: u64) {
+        #[cfg(feature = "latency-metrics")]
         self.dispatch_latency.record(nanos);
+        #[cfg(not(feature = "latency-metrics"))]
+        let _ = nanos;
     }
 
     /// Read a consistent-enough snapshot (Relaxed counters; values may drift).
@@ -68,6 +72,7 @@ pub struct LatencyHistogram {
 }
 
 impl LatencyHistogram {
+    #[cfg(feature = "latency-metrics")]
     fn record(&self, nanos: u64) {
         let idx = LATENCY_BOUNDS_NS
             .iter()
@@ -129,6 +134,7 @@ pub struct MetricsSnapshot {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "latency-metrics")]
     #[test]
     fn histogram_records_buckets() {
         let h = LatencyHistogram::default();

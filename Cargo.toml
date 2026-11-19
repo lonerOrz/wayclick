@@ -9,6 +9,11 @@ repository = "https://github.com/lonerOrz/wayclick"
 keywords = ["audio", "sound", "keyboard", "mouse", "cross-platform"]
 categories = ["command-line-utilities", "multimedia::audio"]
 
+[features]
+# Record per-event dispatch latency and log p50/p95/p99 at shutdown.
+# Off by default: two clock reads per event on the low-latency path.
+latency-metrics = []
+
 [dependencies]
 # Async runtime
 tokio = {
