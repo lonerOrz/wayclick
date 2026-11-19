@@ -4,16 +4,11 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::config::CURRENT_VERSION;
-
 /// Raw JSON shape (`config.json`), not yet validated. `mappings` is a
 /// `BTreeMap` so `SoundId` allocation is deterministic across runs.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawConfig {
-    /// Config schema version; absent means version 1 (legacy config).
-    #[serde(default = "default_version")]
-    pub version: u32,
     /// Policy for unmatched events: "random" (default) or "ignore".
     #[serde(default)]
     pub default_policy: Option<String>,
@@ -29,21 +24,4 @@ pub struct RawConfig {
     /// `"<keycode>" -> "<soundfile.wav>"`.
     #[serde(default)]
     pub mappings: BTreeMap<String, String>,
-}
-
-fn default_version() -> u32 {
-    1
-}
-
-impl Default for RawConfig {
-    fn default() -> Self {
-        Self {
-            version: CURRENT_VERSION,
-            default_policy: None,
-            volume: None,
-            max_voices: None,
-            defaults: Vec::new(),
-            mappings: BTreeMap::new(),
-        }
-    }
 }

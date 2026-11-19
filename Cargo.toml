@@ -1,6 +1,6 @@
 [package]
 name = "wayclick"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 description = "A lightweight cross-platform CLI application for triggering sound effects with keyboard and mouse input."
 readme = "README.md"
@@ -8,6 +8,11 @@ license = "BSD-3-Clause"
 repository = "https://github.com/lonerOrz/wayclick"
 keywords = ["audio", "sound", "keyboard", "mouse", "cross-platform"]
 categories = ["command-line-utilities", "multimedia::audio"]
+
+[features]
+# Record per-event dispatch latency and log p50/p95/p99 at shutdown.
+# Off by default: two clock reads per event on the low-latency path.
+latency-metrics = []
 
 [dependencies]
 # Async runtime
@@ -28,7 +33,7 @@ tokio-stream = "0.1"
 
 # Audio playback and decoding
 rodio = {
-    version = "0.22",
+    version = "0.23.0",
     default-features = false,
     features = ["playback", "hound"],
 }
@@ -45,6 +50,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Random selection
 rand = { version = "0.8", features = ["small_rng"] }
+
+# Fast hashing for the config-built, read-only route table
+rustc-hash = "2"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

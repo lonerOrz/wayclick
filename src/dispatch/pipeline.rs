@@ -64,6 +64,33 @@ pub struct Pipeline {
     failure_log: RateLimitedLog,
 }
 
+/// Start-of-dispatch timer. A zero-sized no-op when `latency-metrics` is off,
+/// so the two clock reads vanish from the default hot path.
+struct LatencyTimer {
+    #[cfg(feature = "latency-metrics")]
+    started: std::time::Instant,
+}
+
+impl LatencyTimer {
+    #[inline]
+    fn start() -> Self {
+        #[cfg(feature = "latency-metrics")]
+        return Self {
+            started: std::time::Instant::now(),
+        };
+        #[cfg(not(feature = "latency-metrics"))]
+        Self {}
+    }
+
+    #[inline]
+    fn record_to(&self, metrics: &Metrics) {
+        #[cfg(feature = "latency-metrics")]
+        metrics.record_dispatch_latency(self.started.elapsed().as_nanos() as u64);
+        #[cfg(not(feature = "latency-metrics"))]
+        let _ = metrics;
+    }
+}
+
 impl Pipeline {
     pub fn new(config: CompiledConfig, engine: Arc<dyn AudioEngine>) -> Pipeline {
         let snapshot = Arc::new(RuntimeSnapshot::from_config(&config));
@@ -102,15 +129,14 @@ impl Pipeline {
     /// Drive one event through route → execute; unmatched events fall through
     /// to a randomly chosen default.
     pub fn handle(&self, event: InputEvent) {
-        let started = std::time::Instant::now();
+        let timer = LatencyTimer::start();
         self.metrics.inc_received();
 
         // Clone the Arc out of the lock so dispatch never holds it.
         let snapshot = match self.snapshot.read() {
             Ok(guard) => Arc::clone(&guard),
             Err(_) => {
-                self.metrics
-                    .record_dispatch_latency(started.elapsed().as_nanos() as u64);
+                timer.record_to(&self.metrics);
                 return;
             }
         };
@@ -123,8 +149,7 @@ impl Pipeline {
         {
             Action::PlaySound(id)
         } else {
-            self.metrics
-                .record_dispatch_latency(started.elapsed().as_nanos() as u64);
+            timer.record_to(&self.metrics);
             return;
         };
 
@@ -143,8 +168,7 @@ impl Pipeline {
                 }
             }
         }
-        self.metrics
-            .record_dispatch_latency(started.elapsed().as_nanos() as u64);
+        timer.record_to(&self.metrics);
     }
 
     /// Consume a backend event stream until it ends.
@@ -305,6 +329,7 @@ mod tests {
         assert_eq!(pipeline.metrics().snapshot().play_requests, 1);
     }
 
+    #[cfg(feature = "latency-metrics")]
     #[test]
     fn dispatch_latency_is_recorded() {
         let engine = Arc::new(FakeAudioEngine::new(false));

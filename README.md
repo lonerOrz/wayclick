@@ -31,7 +31,6 @@ wayclick                    # run the listener
 
 ```json
 {
-  "version": 1,
   "default_policy": "random",
   "volume": 1.0,
   "max_voices": 32,
@@ -189,29 +188,36 @@ Windows (`win:` + X-button ids), and `0`–`4` button numbers on macOS.
 | Option | Meaning |
 | --- | --- |
 | `--config-dir <DIR>` | Configuration directory |
-| `--buffer-frames <N>` | Fixed audio period in frames; `0` = smallest period the device supports (lowest latency) |
+| `--buffer-frames <N>` | Fixed audio period; omitted = Auto, `0` = lowest safe supported period |
 | `--audio-device <NAME>` | Output device matched by case-insensitive name substring |
 | `--enable-trackpads` | Also react to trackpad input (Linux) |
 | `check` | Headless self-test: validate config and decode every sound |
 
 ## Latency
 
-The event path (kernel → router → mixer submit) costs about **0.1 µs**;
-end-to-end latency is dominated by the audio buffer:
+The event path (kernel → router → mixer submit) costs about **0.06 µs** by
+default; end-to-end latency is dominated by the audio buffer:
 
 | `--buffer-frames` | Period | Audible latency (48 kHz, 2-period ring) |
 | ---: | ---: | ---: |
-| `0` (device minimum) | device-defined | typically 1–5 ms |
+| omitted (Auto) | 256 frames target, device-clamped | ~10.7 ms |
+| `0` (LowLatency) | smallest supported period, minimum 64 | device-dependent |
 | `64` | 1.33 ms | ~2.7 ms |
 | `128` | 2.67 ms | ~5.3 ms |
 | `256` | 5.33 ms | ~10.7 ms |
-| `512` (default) | 10.67 ms | ~21 ms |
+| `512` | 10.67 ms | ~21 ms |
+
+Build with `--features latency-metrics` to record per-event dispatch latency
+and print p50/p95/p99 at shutdown. This adds two clock reads per event
+(~0.04 µs), so it is off by default.
 
 Lower periods raise the risk of buffer underruns (clicks) on a loaded
-system. `wayclick` logs a stream error if the device cannot sustain the
-requested size; step up to the next value if that happens. The library's
-own "safe" default is ~50 ms, which `--buffer-frames 0` deliberately
-bypasses by requesting the smallest period the device advertises.
+system. Auto is a device-capability-driven initial choice: it targets 256
+frames clamped to the device's advertised range, and falls back to Rodio's
+safe default when the range is unknown. A device advertising 64 frames does
+not guarantee the system can sustain it under real scheduling load — test
+the lowest stable period on the target machine rather than assuming the
+hardware minimum is safe.
 
 ## Hot reload
 

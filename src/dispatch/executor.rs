@@ -39,8 +39,11 @@ impl Executor {
     }
 
     fn play(&self, id: SoundId) -> Result<(), AudioError> {
-        let Ok(engine) = self.engine.read() else {
-            return Err(AudioError::Device("audio engine lock poisoned".into()));
+        // Clone the Arc out of the lock so the read guard is dropped before
+        // `play()` runs — the mixer submit must not hold the swap lock.
+        let engine = match self.engine.read() {
+            Ok(guard) => Arc::clone(&guard),
+            Err(_) => return Err(AudioError::Device("audio engine lock poisoned".into())),
         };
         engine.play(id)
     }

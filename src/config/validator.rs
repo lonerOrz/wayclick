@@ -206,7 +206,6 @@ mod tests {
 
     fn raw(mappings: BTreeMap<String, String>) -> RawConfig {
         RawConfig {
-            version: 1,
             default_policy: None,
             volume: None,
             max_voices: None,
@@ -279,7 +278,6 @@ mod tests {
     #[test]
     fn default_policy_parsing() {
         let make = |policy: Option<&str>| RawConfig {
-            version: 1,
             default_policy: policy.map(str::to_string),
             volume: None,
             max_voices: None,

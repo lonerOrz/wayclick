@@ -6,7 +6,6 @@ use std::time::SystemTime;
 use crate::config::compiled::CompiledConfig;
 use crate::config::compiler;
 use crate::config::error::ConfigError;
-use crate::config::migration;
 use crate::config::raw::RawConfig;
 use crate::config::validated::ValidatedConfig;
 use crate::config::validator;
@@ -56,10 +55,8 @@ impl ConfigSource for FileConfigSource {
     }
 }
 
-/// The single load pipeline shared by file and string sources:
-/// migrate → validate → reject error diagnostics → compile.
+/// The single load pipeline: validate → reject error diagnostics → compile.
 fn compile_raw(raw: RawConfig) -> Result<(CompiledConfig, ValidatedConfig), ConfigError> {
-    let raw = migration::migrate(raw)?;
     let validated = validator::validate(&raw);
     if validator::has_errors(&validated) {
         return Err(ConfigError::Diagnostics(validated.diagnostics.clone()));
@@ -77,33 +74,6 @@ pub fn from_str(text: &str) -> Result<CompiledConfig, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::CURRENT_VERSION;
-
-    #[test]
-    fn legacy_config_without_version_loads() {
-        let json = r#"{"defaults":["a.wav"],"mappings":{"1":"b.wav"}}"#;
-        let cfg = from_str(json).unwrap();
-        assert_eq!(cfg.sound_count(), 2);
-        assert_eq!(cfg.rules.len(), 1);
-    }
-
-    #[test]
-    fn current_version_config_loads() {
-        let json = format!(
-            r#"{{"version":{},"defaults":["a.wav"],"mappings":{{}}}}"#,
-            CURRENT_VERSION
-        );
-        assert!(from_str(&json).is_ok());
-    }
-
-    #[test]
-    fn future_version_is_rejected() {
-        let json = format!(r#"{{"version":{}}}"#, CURRENT_VERSION + 1);
-        assert!(matches!(
-            from_str(&json),
-            Err(ConfigError::UnsupportedVersion(_))
-        ));
-    }
 
     #[test]
     fn default_policy_ignore_is_compiled() {
