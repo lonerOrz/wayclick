@@ -1,0 +1,6 @@
+# Normalise text files to LF in the repository and in checkouts, so the
+# generated README key table compares byte-for-byte on every platform.
+* text=auto eol=lf
+
+# WAV assets are binary; never touch them.
+*.wav binary
