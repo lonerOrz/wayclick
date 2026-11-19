@@ -21,8 +21,9 @@ struct Cli {
     #[arg(long, global = true)]
     enable_trackpads: bool,
 
-    /// Fixed audio buffer size in frames for lower latency; 0 uses the
-    /// device's own default buffer size.
+    /// Fixed audio period in frames (lower = lower latency; ALSA plays a
+    /// 2-period ring, so latency ≈ 2×frames/sample_rate). 0 asks the device
+    /// for its smallest supported period.
     #[arg(long, global = true)]
     buffer_frames: Option<u32>,
 

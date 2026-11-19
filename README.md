@@ -189,10 +189,29 @@ Windows (`win:` + X-button ids), and `0`–`4` button numbers on macOS.
 | Option | Meaning |
 | --- | --- |
 | `--config-dir <DIR>` | Configuration directory |
-| `--buffer-frames <N>` | Fixed audio buffer for lower latency; `0` = device default |
+| `--buffer-frames <N>` | Fixed audio period in frames; `0` = smallest period the device supports (lowest latency) |
 | `--audio-device <NAME>` | Output device matched by case-insensitive name substring |
 | `--enable-trackpads` | Also react to trackpad input (Linux) |
 | `check` | Headless self-test: validate config and decode every sound |
+
+## Latency
+
+The event path (kernel → router → mixer submit) costs about **0.1 µs**;
+end-to-end latency is dominated by the audio buffer:
+
+| `--buffer-frames` | Period | Audible latency (48 kHz, 2-period ring) |
+| ---: | ---: | ---: |
+| `0` (device minimum) | device-defined | typically 1–5 ms |
+| `64` | 1.33 ms | ~2.7 ms |
+| `128` | 2.67 ms | ~5.3 ms |
+| `256` | 5.33 ms | ~10.7 ms |
+| `512` (default) | 10.67 ms | ~21 ms |
+
+Lower periods raise the risk of buffer underruns (clicks) on a loaded
+system. `wayclick` logs a stream error if the device cannot sustain the
+requested size; step up to the next value if that happens. The library's
+own "safe" default is ~50 ms, which `--buffer-frames 0` deliberately
+bypasses by requesting the smallest period the device advertises.
 
 ## Hot reload
 

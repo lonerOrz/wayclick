@@ -1,9 +1,20 @@
 //! Audio buffer size and output-device selection.
 
 /// Requested output buffer size.
+///
+/// cpal/ALSA interprets a fixed size as the *period* with a 2-period ring
+/// buffer, so the audible latency is roughly `2 × frames / sample_rate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioBufferSize {
-    /// Use the device's default buffer size.
+    /// Ask the device for the smallest period it advertises. This is the
+    /// lowest-latency choice and the one `--buffer-frames 0` selects.
+    ///
+    /// Unlike [`Self::DeviceDefault`], it bypasses the library's ~50 ms
+    /// "safe" default, which would add tens of milliseconds of delay.
+    LowLatency,
+    /// Let the driver pick (cpal `BufferSize::Default`). On PipeWire/ALSA
+    /// this is usually a few hundred frames; when the library opens the sink
+    /// itself it may substitute its own ~50 ms safe size.
     DeviceDefault,
     /// Request a fixed number of frames (must be non-zero).
     Fixed(BufferFrames),

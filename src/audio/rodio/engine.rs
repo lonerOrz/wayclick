@@ -97,6 +97,9 @@ impl RodioEngine {
     /// the default when no match is found. The builder is retried with the
     /// device's other supported configs if the requested buffer size is
     /// rejected, so a bad buffer choice never leaves the app silent.
+    ///
+    /// [`AudioBufferSize::LowLatency`] asks the device for the smallest period
+    /// it advertises, bypassing the library's ~50 ms safe default.
     pub fn new(
         bank: SoundBank,
         buffer: AudioBufferSize,
@@ -108,8 +111,22 @@ impl RodioEngine {
             return Err(AudioError::NoSounds);
         }
 
-        let builder = build_for_device(&device)?;
+        let device_handle = select_device(&device)?;
+        let builder = rodio::stream::DeviceSinkBuilder::from_device(device_handle.clone())?;
         let builder = match buffer {
+            AudioBufferSize::LowLatency => match min_supported_period(&device_handle) {
+                Some(frames) => {
+                    let frames = low_latency_period(frames);
+                    tracing::info!(frames, "requesting minimum device period for low latency");
+                    builder.with_buffer_size(rodio::cpal::BufferSize::Fixed(frames))
+                }
+                None => {
+                    tracing::warn!(
+                        "device does not report a supported buffer range; using its default"
+                    );
+                    builder
+                }
+            },
             AudioBufferSize::DeviceDefault => builder,
             AudioBufferSize::Fixed(frames) => {
                 builder.with_buffer_size(rodio::cpal::BufferSize::Fixed(frames.get()))
@@ -164,16 +181,18 @@ impl RodioEngine {
     }
 }
 
-/// Build a sink builder for the requested device.
+/// Resolve the requested device to a concrete cpal device.
 ///
 /// A named device is matched (case-insensitively) against each output device's
 /// description; if none matches, the default device is used and a warning is
 /// logged so the user knows the selection did not take effect.
-fn build_for_device(device: &AudioDevice) -> Result<rodio::stream::DeviceSinkBuilder, AudioError> {
+fn select_device(device: &AudioDevice) -> Result<rodio::cpal::Device, AudioError> {
+    let host = rodio::cpal::default_host();
     match device {
-        AudioDevice::Default => Ok(rodio::stream::DeviceSinkBuilder::from_default_device()?),
+        AudioDevice::Default => host
+            .default_output_device()
+            .ok_or_else(|| AudioError::Device("no default output device".into())),
         AudioDevice::Named(name) => {
-            let host = rodio::cpal::default_host();
             let devices = host
                 .output_devices()
                 .map_err(|e| AudioError::Device(format!("cannot enumerate output devices: {e}")))?;
@@ -184,16 +203,43 @@ fn build_for_device(device: &AudioDevice) -> Result<rodio::stream::DeviceSinkBui
                     .unwrap_or_default();
                 if device.matches(&description) {
                     tracing::info!(device = %description, "using audio output device");
-                    return Ok(rodio::stream::DeviceSinkBuilder::from_device(candidate)?);
+                    return Ok(candidate);
                 }
             }
             tracing::warn!(
                 requested = name,
                 "audio output device not found; falling back to default"
             );
-            Ok(rodio::stream::DeviceSinkBuilder::from_default_device()?)
+            host.default_output_device()
+                .ok_or_else(|| AudioError::Device("no default output device".into()))
         }
     }
+}
+
+/// The smallest period (in frames) the device advertises, if it reports a
+/// range. Returns `None` when the backend cannot say before opening a stream.
+fn min_supported_period(device: &rodio::cpal::Device) -> Option<u32> {
+    let configs = device.supported_output_configs().ok()?;
+    let mut min = u32::MAX;
+    for config in configs {
+        if let rodio::cpal::SupportedBufferSize::Range { min: lo, .. } = *config.buffer_size() {
+            min = min.min(lo);
+        }
+    }
+    (min != u32::MAX).then_some(min)
+}
+
+/// Lower bound for the low-latency period, in frames.
+///
+/// ALSA happily reports a 1-frame minimum, which no real workload can
+/// sustain: the callback would underrun on the first scheduling hiccup.
+/// 64 frames (1.33 ms at 48 kHz) is the lowest value the latency guidance
+/// recommends; below it the audible gain is nil and clicks are guaranteed.
+const LOW_LATENCY_MIN_PERIOD: u32 = 64;
+
+/// Clamp the device's advertised minimum to a sustainable floor.
+fn low_latency_period(device_min: u32) -> u32 {
+    device_min.max(LOW_LATENCY_MIN_PERIOD)
 }
 
 /// Reserve a voice slot (`false` at the cap); the CAS loop makes
@@ -302,5 +348,15 @@ mod tests {
         assert!(reserve_voice(&voices, 2));
         assert!(reserve_voice(&voices, 2));
         assert!(!reserve_voice(&voices, 2));
+    }
+
+    #[test]
+    fn low_latency_period_has_a_sustainable_floor() {
+        // ALSA reports a 1-frame minimum; never request it.
+        assert_eq!(low_latency_period(1), LOW_LATENCY_MIN_PERIOD);
+        assert_eq!(low_latency_period(0), LOW_LATENCY_MIN_PERIOD);
+        // A device whose real minimum is above the floor is respected.
+        assert_eq!(low_latency_period(256), 256);
+        assert_eq!(low_latency_period(LOW_LATENCY_MIN_PERIOD), 64);
     }
 }

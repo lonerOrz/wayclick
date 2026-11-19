@@ -55,11 +55,12 @@ impl App {
         audio_device: Option<String>,
     ) -> App {
         // CLI semantics: None keeps the historical fixed 512-frame default;
-        // `Some(0)` requests the device's own buffer size; any other value
-        // fixes that many frames.
+        // `Some(0)` asks for the device's smallest period (lowest latency,
+        // bypassing the library's ~50 ms safe default); any other value fixes
+        // that many frames.
         let buffer = match buffer_frames {
             None => default_buffer(),
-            Some(0) => AudioBufferSize::DeviceDefault,
+            Some(0) => AudioBufferSize::LowLatency,
             Some(frames) => match BufferFrames::new(frames) {
                 Some(frames) => AudioBufferSize::Fixed(frames),
                 None => default_buffer(),
